@@ -1,0 +1,55 @@
+name: frontend
+description: "A new Flutter project."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # --- UI & UTILS ---
+  cupertino_icons: ^1.0.8
+  image_picker: ^1.0.7
+  path_provider: ^2.1.2
+
+  # --- AUDIO & PROCESSING ---
+  # UPDATED: v5.2.0 fixes the Linux/Android implementation bugs
+  record: ^5.2.0
+  # Note: We REMOVED record_android/linux. Let the main package handle them.
+
+  permission_handler: ^11.3.0
+  fftea: ^1.4.0
+  image: ^4.1.7
+
+  # --- AI ENGINES ---
+  pytorch_lite: ^4.3.0
+  tflite_flutter: ^0.11.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+# --- ASSETS ---
+flutter:
+  uses-material-design: true
+  assets:
+    # Ensure these files exist in your 'assets/models/' folder
+    - assets/models/PDFace.ptl
+    - assets/models/spiralHandPD.ptl
+    - assets/models/ewadbVoice.ptl
+    - assets/models/simplecnn_dementia_mobile.ptl
+    - assets/models/lifestyle.tflite
+    - assets/labels.txt
+    - assets/spiral_labels.txt
+    - assets/spiral_template.png
+
+# ... (rest of your file)
+
+dependency_overrides:
+  record_android: 1.4.3
+  record_linux: ^1.1.0
+  record_platform_interface: ^1.1.0
