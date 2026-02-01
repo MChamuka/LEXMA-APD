@@ -116,7 +116,7 @@ class _HomePageState extends State<HomePage> {
       _audioModel = await loadSafePytorch(
           "assets/models/ewadbVoice.ptl", "assets/labels.txt");
       _dementiaModel = await loadSafePytorch(
-          "assets/models/simplecnn_dementia_mobile.ptl", "assets/labels.txt");
+          "assets/models/ADClock.ptl", "assets/labels.txt");
 
       try {
         _lifestyleInterpreter =

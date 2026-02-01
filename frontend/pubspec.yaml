@@ -41,7 +41,7 @@ flutter:
     - assets/models/PDFace.ptl
     - assets/models/spiralHandPD.ptl
     - assets/models/ewadbVoice.ptl
-    - assets/models/simplecnn_dementia_mobile.ptl
+    - assets/models/ADClock.ptl
     - assets/models/lifestyle.tflite
     - assets/labels.txt
     - assets/spiral_labels.txt
