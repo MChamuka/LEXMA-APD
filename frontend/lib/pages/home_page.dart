@@ -19,7 +19,6 @@ import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 import 'spiral_test_page.dart';
 
 // --- SERVICES ---
-// Make sure this file exists in lib/services/normalization_service.dart
 import '../services/lifestyle_service.dart';
 
 class HomePage extends StatefulWidget {
@@ -71,7 +70,7 @@ class _HomePageState extends State<HomePage> {
   final sleepController = TextEditingController();
   final tasksController = TextEditingController();
 
-  // --- XAI RESULTS (Explainable AI) ---
+  // --- XAI RESULTS ---
   List<MapEntry<String, double>> _topFactors = [];
 
   @override
@@ -104,7 +103,6 @@ class _HomePageState extends State<HomePage> {
         3,
         labelPath: labelPath,
       );
-      stderr.writeln("✅ LOAD SUCCESS: $path");
       return model;
     } catch (e) {
       stderr.writeln("❌ LOAD FAILED: $path - $e");
@@ -114,8 +112,6 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _loadAllModels() async {
     try {
-      stderr.writeln("--- STARTING MODEL BOOT SEQUENCE ---");
-
       _faceModel = await loadSafePytorch(
           "assets/models/PDFace.ptl", "assets/labels.txt");
       _spiralModel = await loadSafePytorch(
@@ -128,16 +124,13 @@ class _HomePageState extends State<HomePage> {
       try {
         _lifestyleInterpreter =
             await tfl.Interpreter.fromAsset('assets/models/lifestyle.tflite');
-        stderr.writeln("✅ TFLite Model Loaded");
       } catch (e) {
         stderr.writeln("❌ Failed to load Lifestyle TFLite: $e");
       }
     } catch (globalError) {
-      stderr.writeln("💣 GLOBAL CRASH IN _loadAllModels: $globalError");
+      stderr.writeln("💣 GLOBAL CRASH: $globalError");
     } finally {
-      if (mounted) {
-        setState(() => _areModelsLoaded = true);
-      }
+      if (mounted) setState(() => _areModelsLoaded = true);
     }
   }
 
@@ -158,7 +151,6 @@ class _HomePageState extends State<HomePage> {
         } else {
           imageBytes = await File(image.path).readAsBytes();
         }
-
         String prediction = await model.getImagePrediction(imageBytes);
         setState(() => _results[index] = prediction);
       } catch (e) {
@@ -203,7 +195,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // --- HELPER TO CREATE ONE-HOT ENCODING ---
   List<double> _oneHot(int selectedIndex, int totalCategories) {
     List<double> output = List.filled(totalCategories, 0.0);
     if (selectedIndex >= 0 && selectedIndex < totalCategories) {
@@ -212,11 +203,8 @@ class _HomePageState extends State<HomePage> {
     return output;
   }
 
-  // --- BUILD THE INPUT ROW (NORMALIZED) ---
   List<double> _buildInputRow(Map<String, double> numericals) {
     List<double> row = [];
-    // 1. Add Categorical (One-Hot Encoded)
-    // Order matters! Must match Python training columns exactly.
     row.addAll(_oneHot(gender, 2));
     row.addAll(_oneHot(ethnicity, 4));
     row.addAll(_oneHot(education, 4));
@@ -225,8 +213,6 @@ class _HomePageState extends State<HomePage> {
     row.addAll(_oneHot(diabetes, 2));
     row.addAll(_oneHot(depression, 2));
 
-    // 2. Add Numerical (Normalized)
-    // We use the DataConfig service to convert raw input to Z-scores (StandardScaler)
     row.add(DataConfig.normalize('Age', numericals['Age']!));
     row.add(DataConfig.normalize('BMI', numericals['BMI']!));
     row.add(DataConfig.normalize('Alcohol', numericals['Alcohol']!));
@@ -234,15 +220,12 @@ class _HomePageState extends State<HomePage> {
     row.add(DataConfig.normalize('Diet', numericals['Diet']!));
     row.add(DataConfig.normalize('Sleep', numericals['Sleep']!));
     row.add(DataConfig.normalize('Tasks', numericals['Tasks']!));
-
     return row;
   }
 
-  // --- MAIN LIFESTYLE ANALYSIS ---
   void _runLifestyleAnalysis() {
     if (_lifestyleInterpreter == null) return;
     try {
-      // 1. Gather Raw User Input
       Map<String, double> rawNumerical = {
         'Age': double.tryParse(ageController.text) ?? 0.0,
         'BMI': double.tryParse(bmiController.text) ?? 0.0,
@@ -253,15 +236,11 @@ class _HomePageState extends State<HomePage> {
         'Tasks': double.tryParse(tasksController.text) ?? 0.0,
       };
 
-      // 2. Create Model Input (Normalized)
       List<double> inputRow = _buildInputRow(rawNumerical);
-
-      // 3. Run Inference
       var output = List.filled(1 * 3, 0.0).reshape([1, 3]);
       _lifestyleInterpreter!.run([inputRow], output);
       List<double> probs = List<double>.from(output[0]);
 
-      // 4. Determine Winner
       int maxIndex = 0;
       double maxVal = probs[0];
       for (int i = 1; i < probs.length; i++) {
@@ -271,14 +250,20 @@ class _HomePageState extends State<HomePage> {
         }
       }
 
-      String diag = (maxIndex == 0)
-          ? "Healthy"
-          : (maxIndex == 1 ? "Alzheimer's" : "Parkinson's");
+      // --- CRITICAL FIX: MAPPING UPDATED ---
+      String diag;
+      if (maxIndex == 0) {
+        diag = "Parkinson's";
+      } else if (maxIndex == 1) {
+        diag = "Alzheimer's";
+      } else {
+        diag = "Healthy";
+      }
+      // -------------------------------------
 
-      // 5. Run XAI (Explainable AI)
-      // Only run XAI if the user is not Healthy (or if you want to see risks anyway)
       _topFactors.clear();
-      if (maxIndex != 0) {
+      // Only run XAI if NOT Healthy (Index 2 is Healthy now)
+      if (maxIndex != 2) {
         _calculateXAI(rawNumerical, probs, maxIndex);
       }
 
@@ -286,34 +271,24 @@ class _HomePageState extends State<HomePage> {
           () => _results[4] = "$diag (${(maxVal * 100).toStringAsFixed(1)}%)");
     } catch (e) {
       setState(() => _results[4] = "Error");
-      stderr.writeln("Analysis Error: $e");
     }
     Navigator.pop(context);
   }
 
-  // --- XAI: PERTURBATION ANALYSIS ---
   void _calculateXAI(Map<String, double> rawNumerical, List<double> baseProbs,
       int targetClass) {
     Map<String, double> impactScores = {};
 
-    // A. Check Numerical Impact (Wiggle values by 1 Standard Deviation)
     rawNumerical.forEach((key, val) {
       Map<String, double> perturbed = Map.from(rawNumerical);
-      // We add the standard deviation to "simulate" a significant change
-      // Since we normalize later, adding 1.0 * STD to the raw value is effectively adding 1.0 to the Z-score
       perturbed[key] = val + (DataConfig.stds[key] ?? 1.0);
-
       List<double> perturbedInput = _buildInputRow(perturbed);
       var output = List.filled(1 * 3, 0.0).reshape([1, 3]);
       _lifestyleInterpreter!.run([perturbedInput], output);
-
-      double newProb = output[0][targetClass];
-      // The Impact is the absolute difference in probability
-      impactScores[key] = (baseProbs[targetClass] - newProb).abs();
+      impactScores[key] =
+          (baseProbs[targetClass] - output[0][targetClass]).abs();
     });
 
-    // B. Check Categorical Impact (Simple Flip)
-    // Example: Flipping Hypertension to see if it changes the result
     double baseHypScore =
         _testCategoricalFlip(rawNumerical, targetClass, flipHypertension: true);
     impactScores['High BP'] = (baseProbs[targetClass] - baseHypScore).abs();
@@ -322,33 +297,23 @@ class _HomePageState extends State<HomePage> {
         _testCategoricalFlip(rawNumerical, targetClass, flipSmoking: true);
     impactScores['Smoking'] = (baseProbs[targetClass] - baseSmokeScore).abs();
 
-    // C. Sort and Keep Top 3
     var sortedEntries = impactScores.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value)); // Sort Descending
+      ..sort((a, b) => b.value.compareTo(a.value));
 
     _topFactors = sortedEntries.take(3).toList();
   }
 
-  // Helper for XAI to flip boolean categories temporarily
   double _testCategoricalFlip(Map<String, double> nums, int targetClass,
       {bool flipHypertension = false, bool flipSmoking = false}) {
-    // Save state
     int oldHyp = hypertension;
     int oldSmoke = smoking;
-
-    // Flip
     if (flipHypertension) hypertension = (hypertension == 0) ? 1 : 0;
     if (flipSmoking) smoking = (smoking == 0) ? 1 : 0;
-
-    // Run
     List<double> input = _buildInputRow(nums);
     var output = List.filled(1 * 3, 0.0).reshape([1, 3]);
     _lifestyleInterpreter!.run([input], output);
-
-    // Restore state
     hypertension = oldHyp;
     smoking = oldSmoke;
-
     return output[0][targetClass];
   }
 
@@ -377,7 +342,14 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  // --- UPDATED LIFESTYLE CARD WITH PROMINENT RESULT ---
   Widget _buildLifestyleCard() {
+    // 1. Determine Logic for Colors
+    Color statusColor = Colors.grey;
+    if (_results[4].contains("Healthy")) statusColor = Colors.green;
+    if (_results[4].contains("Alzheimer")) statusColor = Colors.redAccent;
+    if (_results[4].contains("Parkinson")) statusColor = Colors.orangeAccent;
+
     return Card(
       margin: const EdgeInsets.only(bottom: 20),
       elevation: 4,
@@ -388,38 +360,71 @@ class _HomePageState extends State<HomePage> {
           children: [
             const Text("Lifestyle Analysis",
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
-            const Icon(Icons.medical_information,
-                size: 50, color: Colors.blueGrey),
-            Text("Result: ${_results[4]}",
-                style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 15),
 
-            // --- XAI CHIPS SECTION START ---
+            // --- HUGE RESULT DISPLAY START ---
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 10),
+              decoration: BoxDecoration(
+                color: statusColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(color: statusColor, width: 2),
+              ),
+              child: Column(
+                children: [
+                  Icon(Icons.monitor_heart, size: 40, color: statusColor),
+                  const SizedBox(height: 5),
+                  Text(
+                    "DIAGNOSIS RESULT",
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                        color: statusColor),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    _results[4], // e.g., "Alzheimer's (88%)"
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 24, // VERY BIG FONT
+                      fontWeight: FontWeight.w900,
+                      color: statusColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // --- HUGE RESULT DISPLAY END ---
+
+            // --- XAI EXPLANATION CHIPS ---
             if (_topFactors.isNotEmpty) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 15),
               const Divider(),
-              const Text("Top Risk Factors:",
-                  style: TextStyle(fontSize: 12, color: Colors.grey)),
-              const SizedBox(height: 5),
+              const Text("⚠️ Primary Contributing Factors:",
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey)),
+              const SizedBox(height: 8),
               Wrap(
                 spacing: 8.0,
                 alignment: WrapAlignment.center,
                 children: _topFactors.map((e) {
-                  // e.key is the Factor Name (e.g. "Age")
-                  // e.value is the Impact Score
                   return Chip(
-                    label: Text(
-                        "${e.key} (+${(e.value * 100).toStringAsFixed(0)}%)"),
-                    backgroundColor: Colors.orange[100],
-                    labelStyle: const TextStyle(fontSize: 12),
-                    padding: EdgeInsets.zero,
+                    avatar: const Icon(Icons.analytics,
+                        size: 16, color: Colors.white),
+                    label: Text("${e.key} impact"),
+                    backgroundColor: Colors.redAccent,
+                    labelStyle: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold),
                   );
                 }).toList(),
               ),
             ],
-            // --- XAI CHIPS SECTION END ---
 
-            const SizedBox(height: 10),
+            const SizedBox(height: 15),
             ElevatedButton(
                 onPressed: () => _openLifestyleForm(),
                 child: const Text("Enter Patient Data")),
@@ -578,7 +583,6 @@ class AudioSpectrogramGenerator {
           .toList());
     });
     img.Image image = img.Image(width: spec.length, height: spec[0].length);
-    // Note: Standard grayscale mapping for spectrogram
     for (int x = 0; x < spec.length; x++) {
       for (int y = 0; y < spec[0].length; y++) {
         int color = (spec[x][y].abs() * 2).toInt().clamp(0, 255);
