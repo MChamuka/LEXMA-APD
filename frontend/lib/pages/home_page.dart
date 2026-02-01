@@ -18,6 +18,10 @@ import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 // --- PAGES ---
 import 'spiral_test_page.dart';
 
+// --- SERVICES ---
+// Make sure this file exists in lib/services/normalization_service.dart
+import '../services/lifestyle_service.dart';
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -66,6 +70,9 @@ class _HomePageState extends State<HomePage> {
   final dietController = TextEditingController();
   final sleepController = TextEditingController();
   final tasksController = TextEditingController();
+
+  // --- XAI RESULTS (Explainable AI) ---
+  List<MapEntry<String, double>> _topFactors = [];
 
   @override
   void initState() {
@@ -196,6 +203,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // --- HELPER TO CREATE ONE-HOT ENCODING ---
   List<double> _oneHot(int selectedIndex, int totalCategories) {
     List<double> output = List.filled(totalCategories, 0.0);
     if (selectedIndex >= 0 && selectedIndex < totalCategories) {
@@ -204,30 +212,56 @@ class _HomePageState extends State<HomePage> {
     return output;
   }
 
+  // --- BUILD THE INPUT ROW (NORMALIZED) ---
+  List<double> _buildInputRow(Map<String, double> numericals) {
+    List<double> row = [];
+    // 1. Add Categorical (One-Hot Encoded)
+    // Order matters! Must match Python training columns exactly.
+    row.addAll(_oneHot(gender, 2));
+    row.addAll(_oneHot(ethnicity, 4));
+    row.addAll(_oneHot(education, 4));
+    row.addAll(_oneHot(smoking, 2));
+    row.addAll(_oneHot(hypertension, 2));
+    row.addAll(_oneHot(diabetes, 2));
+    row.addAll(_oneHot(depression, 2));
+
+    // 2. Add Numerical (Normalized)
+    // We use the DataConfig service to convert raw input to Z-scores (StandardScaler)
+    row.add(DataConfig.normalize('Age', numericals['Age']!));
+    row.add(DataConfig.normalize('BMI', numericals['BMI']!));
+    row.add(DataConfig.normalize('Alcohol', numericals['Alcohol']!));
+    row.add(DataConfig.normalize('Activity', numericals['Activity']!));
+    row.add(DataConfig.normalize('Diet', numericals['Diet']!));
+    row.add(DataConfig.normalize('Sleep', numericals['Sleep']!));
+    row.add(DataConfig.normalize('Tasks', numericals['Tasks']!));
+
+    return row;
+  }
+
+  // --- MAIN LIFESTYLE ANALYSIS ---
   void _runLifestyleAnalysis() {
     if (_lifestyleInterpreter == null) return;
     try {
-      List<double> inputRow = [];
-      inputRow.addAll(_oneHot(gender, 2));
-      inputRow.addAll(_oneHot(ethnicity, 4));
-      inputRow.addAll(_oneHot(education, 4));
-      inputRow.addAll(_oneHot(smoking, 2));
-      inputRow.addAll(_oneHot(hypertension, 2));
-      inputRow.addAll(_oneHot(diabetes, 2));
-      inputRow.addAll(_oneHot(depression, 2));
+      // 1. Gather Raw User Input
+      Map<String, double> rawNumerical = {
+        'Age': double.tryParse(ageController.text) ?? 0.0,
+        'BMI': double.tryParse(bmiController.text) ?? 0.0,
+        'Alcohol': double.tryParse(alcoholController.text) ?? 0.0,
+        'Activity': double.tryParse(activityController.text) ?? 0.0,
+        'Diet': double.tryParse(dietController.text) ?? 0.0,
+        'Sleep': double.tryParse(sleepController.text) ?? 0.0,
+        'Tasks': double.tryParse(tasksController.text) ?? 0.0,
+      };
 
-      inputRow.add(double.tryParse(ageController.text) ?? 0.0);
-      inputRow.add(double.tryParse(bmiController.text) ?? 0.0);
-      inputRow.add(double.tryParse(alcoholController.text) ?? 0.0);
-      inputRow.add(double.tryParse(activityController.text) ?? 0.0);
-      inputRow.add(double.tryParse(dietController.text) ?? 0.0);
-      inputRow.add(double.tryParse(sleepController.text) ?? 0.0);
-      inputRow.add(double.tryParse(tasksController.text) ?? 0.0);
+      // 2. Create Model Input (Normalized)
+      List<double> inputRow = _buildInputRow(rawNumerical);
 
+      // 3. Run Inference
       var output = List.filled(1 * 3, 0.0).reshape([1, 3]);
       _lifestyleInterpreter!.run([inputRow], output);
-      List<double> probs = output[0];
+      List<double> probs = List<double>.from(output[0]);
 
+      // 4. Determine Winner
       int maxIndex = 0;
       double maxVal = probs[0];
       for (int i = 1; i < probs.length; i++) {
@@ -240,12 +274,82 @@ class _HomePageState extends State<HomePage> {
       String diag = (maxIndex == 0)
           ? "Healthy"
           : (maxIndex == 1 ? "Alzheimer's" : "Parkinson's");
+
+      // 5. Run XAI (Explainable AI)
+      // Only run XAI if the user is not Healthy (or if you want to see risks anyway)
+      _topFactors.clear();
+      if (maxIndex != 0) {
+        _calculateXAI(rawNumerical, probs, maxIndex);
+      }
+
       setState(
           () => _results[4] = "$diag (${(maxVal * 100).toStringAsFixed(1)}%)");
     } catch (e) {
       setState(() => _results[4] = "Error");
+      stderr.writeln("Analysis Error: $e");
     }
     Navigator.pop(context);
+  }
+
+  // --- XAI: PERTURBATION ANALYSIS ---
+  void _calculateXAI(Map<String, double> rawNumerical, List<double> baseProbs,
+      int targetClass) {
+    Map<String, double> impactScores = {};
+
+    // A. Check Numerical Impact (Wiggle values by 1 Standard Deviation)
+    rawNumerical.forEach((key, val) {
+      Map<String, double> perturbed = Map.from(rawNumerical);
+      // We add the standard deviation to "simulate" a significant change
+      // Since we normalize later, adding 1.0 * STD to the raw value is effectively adding 1.0 to the Z-score
+      perturbed[key] = val + (DataConfig.stds[key] ?? 1.0);
+
+      List<double> perturbedInput = _buildInputRow(perturbed);
+      var output = List.filled(1 * 3, 0.0).reshape([1, 3]);
+      _lifestyleInterpreter!.run([perturbedInput], output);
+
+      double newProb = output[0][targetClass];
+      // The Impact is the absolute difference in probability
+      impactScores[key] = (baseProbs[targetClass] - newProb).abs();
+    });
+
+    // B. Check Categorical Impact (Simple Flip)
+    // Example: Flipping Hypertension to see if it changes the result
+    double baseHypScore =
+        _testCategoricalFlip(rawNumerical, targetClass, flipHypertension: true);
+    impactScores['High BP'] = (baseProbs[targetClass] - baseHypScore).abs();
+
+    double baseSmokeScore =
+        _testCategoricalFlip(rawNumerical, targetClass, flipSmoking: true);
+    impactScores['Smoking'] = (baseProbs[targetClass] - baseSmokeScore).abs();
+
+    // C. Sort and Keep Top 3
+    var sortedEntries = impactScores.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value)); // Sort Descending
+
+    _topFactors = sortedEntries.take(3).toList();
+  }
+
+  // Helper for XAI to flip boolean categories temporarily
+  double _testCategoricalFlip(Map<String, double> nums, int targetClass,
+      {bool flipHypertension = false, bool flipSmoking = false}) {
+    // Save state
+    int oldHyp = hypertension;
+    int oldSmoke = smoking;
+
+    // Flip
+    if (flipHypertension) hypertension = (hypertension == 0) ? 1 : 0;
+    if (flipSmoking) smoking = (smoking == 0) ? 1 : 0;
+
+    // Run
+    List<double> input = _buildInputRow(nums);
+    var output = List.filled(1 * 3, 0.0).reshape([1, 3]);
+    _lifestyleInterpreter!.run([input], output);
+
+    // Restore state
+    hypertension = oldHyp;
+    smoking = oldSmoke;
+
+    return output[0][targetClass];
   }
 
   @override
@@ -289,6 +393,33 @@ class _HomePageState extends State<HomePage> {
                 size: 50, color: Colors.blueGrey),
             Text("Result: ${_results[4]}",
                 style: const TextStyle(fontWeight: FontWeight.bold)),
+
+            // --- XAI CHIPS SECTION START ---
+            if (_topFactors.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              const Divider(),
+              const Text("Top Risk Factors:",
+                  style: TextStyle(fontSize: 12, color: Colors.grey)),
+              const SizedBox(height: 5),
+              Wrap(
+                spacing: 8.0,
+                alignment: WrapAlignment.center,
+                children: _topFactors.map((e) {
+                  // e.key is the Factor Name (e.g. "Age")
+                  // e.value is the Impact Score
+                  return Chip(
+                    label: Text(
+                        "${e.key} (+${(e.value * 100).toStringAsFixed(0)}%)"),
+                    backgroundColor: Colors.orange[100],
+                    labelStyle: const TextStyle(fontSize: 12),
+                    padding: EdgeInsets.zero,
+                  );
+                }).toList(),
+              ),
+            ],
+            // --- XAI CHIPS SECTION END ---
+
+            const SizedBox(height: 10),
             ElevatedButton(
                 onPressed: () => _openLifestyleForm(),
                 child: const Text("Enter Patient Data")),
@@ -336,16 +467,17 @@ class _HomePageState extends State<HomePage> {
               onPressed: isMissing
                   ? null
                   : () {
-                      if (type == 'spiral')
+                      if (type == 'spiral') {
                         Navigator.push(
                             context,
                             MaterialPageRoute(
                                 builder: (c) =>
                                     SpiralTestPage(model: _spiralModel!)));
-                      else if (type == 'audio')
+                      } else if (type == 'audio') {
                         _handleAudioRecording();
-                      else
+                      } else {
                         _pickImage(index, model);
+                      }
                     },
               icon: Icon(icon),
               label: Text(isMissing ? "Load Failed" : btnText),
