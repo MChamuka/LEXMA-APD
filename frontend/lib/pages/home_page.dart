@@ -22,6 +22,7 @@ import 'spiral_test_page.dart';
 import '../services/lifestyle_service.dart';
 import '../services/audio_sevice.dart';
 import '../services/audio_Xai_service.dart';
+import '../services/face_xai_service.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -75,6 +76,7 @@ class _HomePageState extends State<HomePage> {
   // --- XAI RESULTS ---
   List<MapEntry<String, double>> _topFactors = [];
   List<String> _audioBiomarkers = [];
+  List<String> _faceBiomarkers = [];
   @override
   void initState() {
     super.initState();
@@ -95,15 +97,17 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<ClassificationModel?> loadSafePytorch(
-      String path, String labelPath) async {
+      String path, String labelPath, int numberOfClasses) async {
     try {
-      stderr.writeln("🚀 ATTEMPTING LOAD: $path");
+      stderr.writeln("🚀 ATTEMPTING LOAD: $path with $numberOfClasses classes");
       final model = await PytorchLite.loadClassificationModel(
         path,
         224,
         224,
-        3,
+        3, // This is the image channels (RGB), keep at 3
         labelPath: labelPath,
+        // The numberOfClasses is handled by the label file lines,
+        // but ensuring the path and labels match is what prevents the grey button.
       );
       return model;
     } catch (e) {
@@ -115,13 +119,13 @@ class _HomePageState extends State<HomePage> {
   Future<void> _loadAllModels() async {
     try {
       _faceModel = await loadSafePytorch(
-          "assets/models/PDFace.ptl", "assets/labels.txt");
+          "assets/models/PDFace.ptl", "assets/PDFace_labels.txt", 2);
       _spiralModel = await loadSafePytorch(
-          "assets/models/spiralHandPD.ptl", "assets/spiral_labels.txt");
+          "assets/models/spiralHandPD.ptl", "assets/spiral_labels.txt", 2);
       _audioModel = await loadSafePytorch(
-          "assets/models/ewadbVoice.ptl", "assets/audio_labels.txt");
+          "assets/models/ewadbVoice.ptl", "assets/audio_labels.txt", 3);
       _dementiaModel = await loadSafePytorch(
-          "assets/models/ADClock.ptl", "assets/labels.txt");
+          "assets/models/ADClock.ptl", "assets/labels.txt", 3);
 
       try {
         _lifestyleInterpreter =
@@ -148,13 +152,28 @@ class _HomePageState extends State<HomePage> {
       });
       try {
         Uint8List imageBytes;
+        File originalFile = File(image.path);
+
         if (index == 0) {
-          imageBytes = await FaceImageProcessor.process(File(image.path));
+          // FACE ANALYSIS
+          imageBytes = await FaceImageProcessor.process(originalFile);
+          String prediction = await model.getImagePrediction(imageBytes);
+
+          // --- NEW XAI LOGIC FOR FACE ---
+          File xaiImage =
+              await FaceXAIService.generateHeatmap(originalFile, prediction);
+
+          setState(() {
+            _images[0] = xaiImage; // Show the colorized face
+            _results[0] = prediction;
+            _faceBiomarkers = FaceXAIService.getFaceBiomarkers(prediction);
+          });
         } else {
-          imageBytes = await File(image.path).readAsBytes();
+          // ... rest of your existing logic for MRI/other images
+          imageBytes = await originalFile.readAsBytes();
+          String prediction = await model.getImagePrediction(imageBytes);
+          setState(() => _results[index] = prediction);
         }
-        String prediction = await model.getImagePrediction(imageBytes);
-        setState(() => _results[index] = prediction);
       } catch (e) {
         setState(() => _results[index] = "Error: $e");
       }
@@ -486,6 +505,25 @@ class _HomePageState extends State<HomePage> {
             Text("Result: ${_results[index]}",
                 style: const TextStyle(fontWeight: FontWeight.bold)),
 
+            // --- FACE XAI BIOMARKERS ---
+            if (type == 'image' && _faceBiomarkers.isNotEmpty && index == 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: Wrap(
+                  spacing: 4,
+                  alignment: WrapAlignment.center,
+                  children: _faceBiomarkers
+                      .map((b) => Chip(
+                            visualDensity: VisualDensity.compact,
+                            backgroundColor: Colors.orange.withOpacity(0.1),
+                            label: Text(b,
+                                style: const TextStyle(
+                                    fontSize: 10, color: Colors.orange)),
+                          ))
+                      .toList(),
+                ),
+              ),
+
             // 3. Audio XAI Biomarkers (Only for Audio card)
             if (type == 'audio' && _audioBiomarkers.isNotEmpty && index == 2)
               Padding(
@@ -601,9 +639,17 @@ class FaceImageProcessor {
     final bytes = await imageFile.readAsBytes();
     img.Image? original = img.decodeImage(bytes);
     if (original == null) throw Exception("Invalid Image");
+
+    // 1. Resize to 224x224 (Matches your training)
     img.Image resized = img.copyResize(original, width: 224, height: 224);
+
+    // 2. Grayscale + Blur (Matches your preprocessing: GaussianBlur(3,3))
     img.Image gray = img.grayscale(resized);
-    return Uint8List.fromList(img.encodePng(gray));
+    img.Image blurred =
+        img.gaussianBlur(gray, radius: 1); // radius 1 approx 3x3 kernel
+
+    // 3. Encode as PNG/JPG to send to PytorchLite
+    return Uint8List.fromList(img.encodePng(blurred));
   }
 }
 
