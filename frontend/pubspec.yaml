@@ -46,6 +46,8 @@ flutter:
     - assets/labels.txt
     - assets/spiral_labels.txt
     - assets/spiral_template.png
+    - assets/audio_labels.txt
+
 
 # ... (rest of your file)
 

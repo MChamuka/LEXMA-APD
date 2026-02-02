@@ -20,6 +20,8 @@ import 'spiral_test_page.dart';
 
 // --- SERVICES ---
 import '../services/lifestyle_service.dart';
+import '../services/audio_sevice.dart';
+import '../services/audio_Xai_service.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -72,7 +74,7 @@ class _HomePageState extends State<HomePage> {
 
   // --- XAI RESULTS ---
   List<MapEntry<String, double>> _topFactors = [];
-
+  List<String> _audioBiomarkers = [];
   @override
   void initState() {
     super.initState();
@@ -117,7 +119,7 @@ class _HomePageState extends State<HomePage> {
       _spiralModel = await loadSafePytorch(
           "assets/models/spiralHandPD.ptl", "assets/spiral_labels.txt");
       _audioModel = await loadSafePytorch(
-          "assets/models/ewadbVoice.ptl", "assets/labels.txt");
+          "assets/models/ewadbVoice.ptl", "assets/audio_labels.txt");
       _dementiaModel = await loadSafePytorch(
           "assets/models/ADClock.ptl", "assets/labels.txt");
 
@@ -164,32 +166,42 @@ class _HomePageState extends State<HomePage> {
     if (status != PermissionStatus.granted) return;
 
     if (!_isRecording) {
-      try {
-        final directory = await getTemporaryDirectory();
-        String path = '${directory.path}/temp_audio.wav';
-        await _audioRecorder
-            .start(const RecordConfig(encoder: AudioEncoder.wav), path: path);
-        setState(() {
-          _isRecording = true;
-          _results[2] = "Recording...";
-        });
-      } catch (e) {
-        stderr.writeln("Recording Error: $e");
-      }
+      final directory = await getTemporaryDirectory();
+      String path = '${directory.path}/temp_audio.wav';
+      await _audioRecorder.start(const RecordConfig(encoder: AudioEncoder.wav),
+          path: path);
+      setState(() {
+        _isRecording = true;
+        _results[2] = "Recording...";
+      });
     } else {
       final path = await _audioRecorder.stop();
       setState(() => _isRecording = false);
+
+      // ... inside the 'else' block where recording stops
       if (path != null && _audioModel != null) {
         setState(() => _results[2] = "Analyzing...");
         try {
-          File spectrogramFile =
-              await AudioSpectrogramGenerator.generateSpectrogram(path);
-          setState(() => _images[2] = spectrogramFile);
-          Uint8List bytes = await spectrogramFile.readAsBytes();
+          // 1. Generate standard spectrogram for the model
+          File rawSpec = await AudioService.generateV2Spectrogram(path);
+
+          // 2. Get Prediction
+          Uint8List bytes = await rawSpec.readAsBytes();
           String prediction = await _audioModel!.getImagePrediction(bytes);
-          setState(() => _results[2] = prediction);
+
+          // 3. Generate the Colorized XAI Heatmap
+          // We pass the prediction so the XAI knows which class to "explain"
+          File heatmap =
+              await AudioXAIService.generateHeatmap(rawSpec, prediction);
+
+          setState(() {
+            _images[2] =
+                heatmap; // This updates the UI to show the RED/GREEN image
+            _results[2] = prediction;
+            _audioBiomarkers = AudioXAIService.getBiomarkers(prediction);
+          });
         } catch (e) {
-          setState(() => _results[2] = "Failed: $e");
+          setState(() => _results[2] = "Error: $e");
         }
       }
     }
@@ -454,6 +466,8 @@ class _HomePageState extends State<HomePage> {
                 style:
                     const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
+
+            // 1. Image or Icon Slot
             if (type != 'spiral')
               Container(
                 height: 100,
@@ -465,9 +479,33 @@ class _HomePageState extends State<HomePage> {
               )
             else
               const Icon(Icons.gesture, size: 80, color: Colors.blueAccent),
+
             const SizedBox(height: 10),
+
+            // 2. The Main Diagnosis Result
             Text("Result: ${_results[index]}",
                 style: const TextStyle(fontWeight: FontWeight.bold)),
+
+            // 3. Audio XAI Biomarkers (Only for Audio card)
+            if (type == 'audio' && _audioBiomarkers.isNotEmpty && index == 2)
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: Wrap(
+                  spacing: 4,
+                  alignment: WrapAlignment.center,
+                  children: _audioBiomarkers
+                      .map((b) => Chip(
+                            visualDensity: VisualDensity.compact,
+                            backgroundColor: Colors.blue.withOpacity(0.1),
+                            label: Text(b,
+                                style: const TextStyle(
+                                    fontSize: 10, color: Colors.blue)),
+                          ))
+                      .toList(),
+                ),
+              ),
+
+            const SizedBox(height: 10),
             ElevatedButton.icon(
               onPressed: isMissing
                   ? null

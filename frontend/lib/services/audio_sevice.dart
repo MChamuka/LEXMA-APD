@@ -10,21 +10,20 @@ class AudioService {
     final bytes = await File(audioPath).readAsBytes();
     final audioData = _wavToFloat(bytes);
 
-    // Matches Python n_fft=2048
+    // matches n_fft=2048 from your Python training
     final stft = STFT(2048, Window.hanning(2048));
     List<List<double>> spec = [];
 
     stft.run(audioData, (Float64x2List freq) {
       final magnitudes = freq.magnitudes();
-      // Take first 1024 bins (Nyquist) and convert to dB
-      spec.add(magnitudes.take(1024).map((m) {
-        double db = 20 * (log(m + 1e-9) / ln10);
-        return db;
-      }).toList());
+      // Log scale conversion
+      spec.add(magnitudes
+          .take(1024)
+          .map((m) => 20 * (log(m + 1e-9) / ln10))
+          .toList());
     });
 
-    // --- ALIGNMENT WITH PYTHON LOGIC ---
-    // 1. Flatten to find mean/std for normalization
+    // Normalization logic to match Python standardization
     List<double> flat = spec.expand((e) => e).toList();
     double mean = flat.reduce((a, b) => a + b) / flat.length;
     double variance =
@@ -35,18 +34,16 @@ class AudioService {
 
     for (int x = 0; x < spec.length; x++) {
       for (int y = 0; y < 1024; y++) {
-        // Z-score normalization then map to 0-255
         double normalized = (spec[x][y] - mean) / std;
         int pixelVal = (((normalized + 2) / 4) * 255).clamp(0, 255).toInt();
-
-        // Stack to 3 channels (RGB) as expected by your CNN
+        // Set pixels in the new Image format
         image.setPixelRgb(x, 1023 - y, pixelVal, pixelVal, pixelVal);
       }
     }
 
     img.Image resized = img.copyResize(image, width: 224, height: 224);
     final tempDir = await getTemporaryDirectory();
-    final saveFile = File('${tempDir.path}/refined_spec.png');
+    final saveFile = File('${tempDir.path}/input_spec.png');
     await saveFile.writeAsBytes(img.encodePng(resized));
     return saveFile;
   }
