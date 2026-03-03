@@ -1,7 +1,9 @@
 import 'dart:typed_data';
 import 'dart:io';
 import 'dart:math';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // NEW (haptics)
 import 'package:image_picker/image_picker.dart';
 
 // --- PACKAGES ---
@@ -77,6 +79,121 @@ class _HomePageState extends State<HomePage> {
   List<MapEntry<String, double>> _topFactors = [];
   List<String> _audioBiomarkers = [];
   List<String> _faceBiomarkers = [];
+
+  // ===== UI (NEW) =====
+  int _currentStep = 0; // 0..4
+  bool _showHelp = false;
+
+  void _setStep(int i) {
+    setState(() => _currentStep = i.clamp(0, 4));
+    HapticFeedback.selectionClick();
+  }
+
+  String _shortResult(String s) =>
+      (s.length > 28) ? "${s.substring(0, 28)}..." : s;
+
+  Color _resultColor(String r) {
+    final t = r.toLowerCase();
+    if (t.contains("healthy")) return Colors.green;
+    if (t.contains("alzheimer")) return Colors.redAccent;
+    if (t.contains("parkinson")) return Colors.orangeAccent;
+    if (t.contains("error")) return Colors.red;
+    if (t.contains("analyzing") || t.contains("recording"))
+      return Colors.blueGrey;
+    return Colors.grey;
+  }
+
+  String _resultBadgeText(String r) {
+    final t = r.toLowerCase();
+    if (t.contains("not analyzed")) return "Not done";
+    if (t.contains("analyzing")) return "Working";
+    if (t.contains("recording")) return "Recording";
+    if (t.contains("error")) return "Error";
+    return "Done";
+  }
+
+  IconData _badgeIcon(String r) {
+    final t = r.toLowerCase();
+    if (t.contains("not analyzed")) return Icons.radio_button_unchecked;
+    if (t.contains("analyzing")) return Icons.hourglass_bottom;
+    if (t.contains("recording")) return Icons.mic;
+    if (t.contains("error")) return Icons.error_outline;
+    return Icons.check_circle_outline;
+  }
+
+  bool _isStepDone(int i) =>
+      !_results[i].toLowerCase().contains("not analyzed");
+
+  List<_ModalityUI> _mods() => [
+        _ModalityUI(
+          index: 0,
+          stepName: "Face",
+          title: "Face Check",
+          subtitle: "Upload a face photo for analysis",
+          icon: Icons.face_retouching_natural,
+          primaryButton: "Upload Photo",
+          type: 'image',
+          model: _faceModel,
+          explainTitle: "Face Explanation",
+          explainBody: _faceBiomarkers.isEmpty
+              ? "After analysis, key facial biomarkers will appear here."
+              : null,
+        ),
+        _ModalityUI(
+          index: 1,
+          stepName: "Spiral",
+          title: "Spiral Test",
+          subtitle: "Draw the spiral with guided steps",
+          icon: Icons.gesture,
+          primaryButton: "Start Spiral Test",
+          type: 'spiral',
+          model: _spiralModel,
+          explainTitle: "Spiral Explanation",
+          explainBody: "This test helps detect motor-control patterns.",
+        ),
+        _ModalityUI(
+          index: 2,
+          stepName: "Voice",
+          title: "Voice Check",
+          subtitle: "Record a short voice sample",
+          icon: Icons.mic,
+          primaryButton: _isRecording ? "Stop Recording" : "Record Voice",
+          type: 'audio',
+          model: _audioModel,
+          explainTitle: "Voice Explanation",
+          explainBody: _audioBiomarkers.isEmpty
+              ? "After analysis, voice biomarkers will appear here."
+              : null,
+        ),
+        _ModalityUI(
+          index: 3,
+          stepName: "MRI",
+          title: "Brain Scan",
+          subtitle: "Upload MRI scan image",
+          icon: Icons.image_search,
+          primaryButton: "Upload Scan",
+          type: 'image',
+          model: _dementiaModel,
+          explainTitle: "MRI Explanation",
+          explainBody:
+              "After analysis, the diagnosis result will be shown. (You can add MRI biomarkers later.)",
+        ),
+        _ModalityUI(
+          index: 4,
+          stepName: "Lifestyle",
+          title: "Lifestyle Check",
+          subtitle: "Answer a few questions (guided form)",
+          icon: Icons.monitor_heart,
+          primaryButton: "Enter Patient Data",
+          type: 'lifestyle',
+          model: null,
+          explainTitle: "Lifestyle Explanation",
+          explainBody: _topFactors.isEmpty
+              ? "After analysis, top contributing factors will show here."
+              : null,
+        ),
+      ];
+
   @override
   void initState() {
     super.initState();
@@ -104,10 +221,8 @@ class _HomePageState extends State<HomePage> {
         path,
         224,
         224,
-        3, // This is the image channels (RGB), keep at 3
+        3,
         labelPath: labelPath,
-        // The numberOfClasses is handled by the label file lines,
-        // but ensuring the path and labels match is what prevents the grey button.
       );
       return model;
     } catch (e) {
@@ -159,17 +274,17 @@ class _HomePageState extends State<HomePage> {
           imageBytes = await FaceImageProcessor.process(originalFile);
           String prediction = await model.getImagePrediction(imageBytes);
 
-          // --- NEW XAI LOGIC FOR FACE ---
+          // XAI heatmap
           File xaiImage =
               await FaceXAIService.generateHeatmap(originalFile, prediction);
 
           setState(() {
-            _images[0] = xaiImage; // Show the colorized face
+            _images[0] = xaiImage;
             _results[0] = prediction;
             _faceBiomarkers = FaceXAIService.getFaceBiomarkers(prediction);
           });
         } else {
-          // ... rest of your existing logic for MRI/other images
+          // MRI / Other images
           imageBytes = await originalFile.readAsBytes();
           String prediction = await model.getImagePrediction(imageBytes);
           setState(() => _results[index] = prediction);
@@ -197,25 +312,22 @@ class _HomePageState extends State<HomePage> {
       final path = await _audioRecorder.stop();
       setState(() => _isRecording = false);
 
-      // ... inside the 'else' block where recording stops
       if (path != null && _audioModel != null) {
         setState(() => _results[2] = "Analyzing...");
         try {
-          // 1. Generate standard spectrogram for the model
+          // 1. Generate spectrogram for model
           File rawSpec = await AudioService.generateV2Spectrogram(path);
 
-          // 2. Get Prediction
+          // 2. Predict
           Uint8List bytes = await rawSpec.readAsBytes();
           String prediction = await _audioModel!.getImagePrediction(bytes);
 
-          // 3. Generate the Colorized XAI Heatmap
-          // We pass the prediction so the XAI knows which class to "explain"
+          // 3. XAI heatmap
           File heatmap =
               await AudioXAIService.generateHeatmap(rawSpec, prediction);
 
           setState(() {
-            _images[2] =
-                heatmap; // This updates the UI to show the RED/GREEN image
+            _images[2] = heatmap;
             _results[2] = prediction;
             _audioBiomarkers = AudioXAIService.getBiomarkers(prediction);
           });
@@ -281,7 +393,7 @@ class _HomePageState extends State<HomePage> {
         }
       }
 
-      // --- CRITICAL FIX: MAPPING UPDATED ---
+      // --- MAPPING ---
       String diag;
       if (maxIndex == 0) {
         diag = "Parkinson's";
@@ -290,10 +402,8 @@ class _HomePageState extends State<HomePage> {
       } else {
         diag = "Healthy";
       }
-      // -------------------------------------
 
       _topFactors.clear();
-      // Only run XAI if NOT Healthy (Index 2 is Healthy now)
       if (maxIndex != 2) {
         _calculateXAI(rawNumerical, probs, maxIndex);
       }
@@ -348,220 +458,80 @@ class _HomePageState extends State<HomePage> {
     return output[0][targetClass];
   }
 
+  // ===========================
+  //          UI BUILD
+  // ===========================
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("Multimodal Diagnosis")),
-      body: !_areModelsLoaded
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                _buildModelCard(0, "Face Analysis", "Upload Face", _faceModel,
-                    type: 'image'),
-                _buildModelCard(1, "Spiral Test", "Start Test", _spiralModel,
-                    type: 'spiral'),
-                _buildModelCard(2, "Voice Analysis",
-                    _isRecording ? "Stop" : "Record Voice", _audioModel,
-                    type: 'audio'),
-                _buildModelCard(
-                    3, "MRI Scan", "Upload Brain Scan", _dementiaModel,
-                    type: 'image'),
-                _buildLifestyleCard(),
-              ],
+    return Theme(
+      data: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: Colors.blue,
+        scaffoldBackgroundColor: const Color(0xFFF7F8FA),
+        textTheme: Theme.of(context).textTheme.apply(
+              bodyColor: const Color(0xFF1F2937),
+              displayColor: const Color(0xFF1F2937),
             ),
-    );
-  }
-
-  // --- UPDATED LIFESTYLE CARD WITH PROMINENT RESULT ---
-  Widget _buildLifestyleCard() {
-    // 1. Determine Logic for Colors
-    Color statusColor = Colors.grey;
-    if (_results[4].contains("Healthy")) statusColor = Colors.green;
-    if (_results[4].contains("Alzheimer")) statusColor = Colors.redAccent;
-    if (_results[4].contains("Parkinson")) statusColor = Colors.orangeAccent;
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 20),
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            const Text("Lifestyle Analysis",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 15),
-
-            // --- HUGE RESULT DISPLAY START ---
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 10),
-              decoration: BoxDecoration(
-                color: statusColor.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(15),
-                border: Border.all(color: statusColor, width: 2),
-              ),
-              child: Column(
-                children: [
-                  Icon(Icons.monitor_heart, size: 40, color: statusColor),
-                  const SizedBox(height: 5),
-                  Text(
-                    "DIAGNOSIS RESULT",
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1.2,
-                        color: statusColor),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    _results[4], // e.g., "Alzheimer's (88%)"
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 24, // VERY BIG FONT
-                      fontWeight: FontWeight.w900,
-                      color: statusColor,
+      ),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text("LEXMA-APD"),
+          centerTitle: true,
+          actions: [
+            IconButton(
+              tooltip: "Help",
+              icon: const Icon(Icons.help_outline),
+              onPressed: () => setState(() => _showHelp = !_showHelp),
+            ),
+          ],
+        ),
+        body: !_areModelsLoaded
+            ? _buildLoadingScreen()
+            : SafeArea(
+                child: Column(
+                  children: [
+                    if (_showHelp) _buildHelpBanner(),
+                    _buildStepStrip(),
+                    Expanded(
+                      child: ListView(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                        children: [
+                          _buildOverviewCard(),
+                          const SizedBox(height: 12),
+                          ..._mods().map((m) => _buildStepCard(m)).toList(),
+                          const SizedBox(height: 10),
+                          _buildFooterNote(),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            // --- HUGE RESULT DISPLAY END ---
-
-            // --- XAI EXPLANATION CHIPS ---
-            if (_topFactors.isNotEmpty) ...[
-              const SizedBox(height: 15),
-              const Divider(),
-              const Text("⚠️ Primary Contributing Factors:",
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8.0,
-                alignment: WrapAlignment.center,
-                children: _topFactors.map((e) {
-                  return Chip(
-                    avatar: const Icon(Icons.analytics,
-                        size: 16, color: Colors.white),
-                    label: Text("${e.key} impact"),
-                    backgroundColor: Colors.redAccent,
-                    labelStyle: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold),
-                  );
-                }).toList(),
-              ),
-            ],
-
-            const SizedBox(height: 15),
-            ElevatedButton(
-                onPressed: () => _openLifestyleForm(),
-                child: const Text("Enter Patient Data")),
-          ],
-        ),
       ),
     );
   }
 
-  Widget _buildModelCard(
-      int index, String title, String btnText, ClassificationModel? model,
-      {required String type}) {
-    bool isMissing = model == null;
-    IconData icon = (type == 'audio')
-        ? Icons.mic
-        : (type == 'spiral' ? Icons.gesture : Icons.image);
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 20),
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+  Widget _buildLoadingScreen() {
+    return Center(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(24),
         child: Column(
-          children: [
-            Text(title,
-                style:
-                    const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
-
-            // 1. Image or Icon Slot
-            if (type != 'spiral')
-              Container(
-                height: 100,
-                width: double.infinity,
-                color: Colors.grey[100],
-                child: _images[index] == null
-                    ? Icon(icon, size: 40, color: Colors.grey)
-                    : Image.file(_images[index]!, fit: BoxFit.cover),
-              )
-            else
-              const Icon(Icons.gesture, size: 80, color: Colors.blueAccent),
-
-            const SizedBox(height: 10),
-
-            // 2. The Main Diagnosis Result
-            Text("Result: ${_results[index]}",
-                style: const TextStyle(fontWeight: FontWeight.bold)),
-
-            // --- FACE XAI BIOMARKERS ---
-            if (type == 'image' && _faceBiomarkers.isNotEmpty && index == 0)
-              Padding(
-                padding: const EdgeInsets.only(top: 8.0),
-                child: Wrap(
-                  spacing: 4,
-                  alignment: WrapAlignment.center,
-                  children: _faceBiomarkers
-                      .map((b) => Chip(
-                            visualDensity: VisualDensity.compact,
-                            backgroundColor: Colors.orange.withOpacity(0.1),
-                            label: Text(b,
-                                style: const TextStyle(
-                                    fontSize: 10, color: Colors.orange)),
-                          ))
-                      .toList(),
-                ),
-              ),
-
-            // 3. Audio XAI Biomarkers (Only for Audio card)
-            if (type == 'audio' && _audioBiomarkers.isNotEmpty && index == 2)
-              Padding(
-                padding: const EdgeInsets.only(top: 8.0),
-                child: Wrap(
-                  spacing: 4,
-                  alignment: WrapAlignment.center,
-                  children: _audioBiomarkers
-                      .map((b) => Chip(
-                            visualDensity: VisualDensity.compact,
-                            backgroundColor: Colors.blue.withOpacity(0.1),
-                            label: Text(b,
-                                style: const TextStyle(
-                                    fontSize: 10, color: Colors.blue)),
-                          ))
-                      .toList(),
-                ),
-              ),
-
-            const SizedBox(height: 10),
-            ElevatedButton.icon(
-              onPressed: isMissing
-                  ? null
-                  : () {
-                      if (type == 'spiral') {
-                        Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (c) =>
-                                    SpiralTestPage(model: _spiralModel!)));
-                      } else if (type == 'audio') {
-                        _handleAudioRecording();
-                      } else {
-                        _pickImage(index, model);
-                      }
-                    },
-              icon: Icon(icon),
-              label: Text(isMissing ? "Load Failed" : btnText),
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: const [
+            SizedBox(
+              width: 46,
+              height: 46,
+              child: CircularProgressIndicator(strokeWidth: 4),
+            ),
+            SizedBox(height: 16),
+            Text(
+              "Loading AI models…",
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            SizedBox(height: 6),
+            Text(
+              "Please wait a moment",
+              style: TextStyle(color: Colors.grey),
             ),
           ],
         ),
@@ -569,86 +539,662 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _openLifestyleForm() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Lifestyle Assessment"),
-        content: SingleChildScrollView(
-          child: Column(
-            children: [
-              _buildDropdown("Gender", ["Female", "Male"], (v) => gender = v),
-              _buildDropdown(
-                  "Ethnicity",
-                  ["Caucasian", "African", "Asian", "Other"],
-                  (v) => ethnicity = v),
-              _buildDropdown(
-                  "Education",
-                  ["None", "High School", "Bachelor", "Higher"],
-                  (v) => education = v),
-              _buildDropdown("Smoking", ["No", "Yes"], (v) => smoking = v),
-              _buildDropdown("High BP", ["No", "Yes"], (v) => hypertension = v),
-              _buildDropdown("Diabetes", ["No", "Yes"], (v) => diabetes = v),
-              _buildDropdown(
-                  "Depression", ["No", "Yes"], (v) => depression = v),
-              _buildNumField("Age", ageController),
-              _buildNumField("BMI", bmiController),
-              _buildNumField("Alcohol", alcoholController),
-              _buildNumField("Exercise", activityController),
-              _buildNumField("Diet", dietController),
-              _buildNumField("Sleep", sleepController),
-              _buildNumField("Tasks", tasksController),
-            ],
+  Widget _buildHelpBanner() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.blue.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.blue.withOpacity(0.25)),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline, size: 18),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              "Follow the steps from left to right. Each step shows a clear result and an explanation panel to help understand why the AI decided that.",
+              style: TextStyle(fontSize: 13),
+            ),
           ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Cancel")),
-          ElevatedButton(
-              onPressed: _runLifestyleAnalysis, child: const Text("Analyze"))
         ],
       ),
     );
   }
 
-  Widget _buildDropdown(
-      String label, List<String> items, Function(int) onChanged) {
-    return DropdownButtonFormField<String>(
-      decoration: InputDecoration(labelText: label),
-      items: items
-          .asMap()
-          .entries
-          .map((e) =>
-              DropdownMenuItem(value: e.key.toString(), child: Text(e.value)))
-          .toList(),
-      onChanged: (val) => onChanged(int.parse(val!)),
+  Widget _buildStepStrip() {
+    final mods = _mods();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 10,
+            color: Colors.black.withOpacity(0.06),
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: List.generate(mods.length, (i) {
+          final done = _isStepDone(i);
+          final active = _currentStep == i;
+          return Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => _setStep(i),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: active
+                      ? Colors.blue.withOpacity(0.08)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      done ? Icons.check_circle : Icons.circle_outlined,
+                      size: 18,
+                      color: done
+                          ? Colors.green
+                          : (active ? Colors.blue : Colors.grey),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      mods[i].stepName,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                        color: active ? Colors.blue : Colors.grey[700],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }),
+      ),
     );
   }
 
-  Widget _buildNumField(String label, TextEditingController controller) {
-    return TextField(
+  Widget _buildOverviewCard() {
+    final doneCount =
+        List.generate(5, (i) => _isStepDone(i)).where((x) => x).length;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 12,
+            color: Colors.black.withOpacity(0.06),
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: Colors.blue.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(Icons.medical_information, color: Colors.blue),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "Guided Screening",
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  "Completed $doneCount / 5 steps",
+                  style: TextStyle(color: Colors.grey[700], fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+          TextButton.icon(
+            onPressed: () => _setStep((_currentStep + 1).clamp(0, 4)),
+            icon: const Icon(Icons.arrow_forward),
+            label: const Text("Next"),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepCard(_ModalityUI m) {
+    final idx = m.index;
+    final result = _results[idx];
+    final color = _resultColor(result);
+
+    final isMissing = (m.type != 'lifestyle') && (m.model == null);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 12,
+            color: Colors.black.withOpacity(0.06),
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(m.icon, color: Colors.blue),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      m.title,
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      m.subtitle,
+                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                    ),
+                  ],
+                ),
+              ),
+              _StatusPill(
+                icon: _badgeIcon(result),
+                text: _resultBadgeText(result),
+                color: color,
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+
+          // Preview area
+          if (m.type == 'image' || m.type == 'audio')
+            _PreviewBox(
+              child: (_images[idx] != null)
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: Image.file(_images[idx]!, fit: BoxFit.cover),
+                    )
+                  : Center(
+                      child: Icon(
+                        m.type == 'audio' ? Icons.graphic_eq : m.icon,
+                        size: 42,
+                        color: Colors.grey[500],
+                      ),
+                    ),
+            )
+          else if (m.type == 'spiral')
+            _PreviewBox(
+              child: Center(
+                child: Icon(Icons.gesture, size: 50, color: Colors.grey[500]),
+              ),
+            ),
+
+          const SizedBox(height: 10),
+
+          // Result panel
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: color.withOpacity(0.35)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.assessment_outlined, color: color),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _shortResult(result),
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: color),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
+          // Explanation panel
+          _buildExplanationPanel(m),
+
+          const SizedBox(height: 12),
+
+          // Big primary button
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton.icon(
+              onPressed: isMissing
+                  ? null
+                  : () {
+                      _setStep(idx);
+
+                      if (m.type == 'spiral') {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (c) =>
+                                SpiralTestPage(model: _spiralModel!),
+                          ),
+                        );
+                      } else if (m.type == 'audio') {
+                        _handleAudioRecording();
+                      } else if (m.type == 'lifestyle') {
+                        _openLifestyleForm();
+                      } else {
+                        _pickImage(idx, m.model);
+                      }
+                    },
+              icon: Icon(isMissing ? Icons.warning_amber : m.icon),
+              label: Text(isMissing ? "Model load failed" : m.primaryButton),
+              style: ElevatedButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExplanationPanel(_ModalityUI m) {
+    final idx = m.index;
+
+    List<Widget> chips = [];
+
+    if (idx == 0 && _faceBiomarkers.isNotEmpty) {
+      chips = _faceBiomarkers
+          .map((b) => _SmallChip(text: b, icon: Icons.visibility))
+          .toList();
+    } else if (idx == 2 && _audioBiomarkers.isNotEmpty) {
+      chips = _audioBiomarkers
+          .map((b) => _SmallChip(text: b, icon: Icons.multitrack_audio))
+          .toList();
+    } else if (idx == 4 && _topFactors.isNotEmpty) {
+      chips = _topFactors
+          .map((e) => _SmallChip(text: e.key, icon: Icons.analytics))
+          .toList();
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7F8FA),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.black.withOpacity(0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            m.explainTitle,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 6),
+          if (chips.isEmpty)
+            Text(
+              m.explainBody ?? "Run this step to see explanations.",
+              style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: chips,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFooterNote() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+      child: Text(
+        "Note: LEXMA-APD provides screening support with explainable insights. It does not replace a clinical diagnosis.",
+        style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+        textAlign: TextAlign.center,
+      ),
+    );
+  }
+
+  // ===========================
+  //   LIFESTYLE FORM (NEW UI)
+  // ===========================
+  void _openLifestyleForm() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 14,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+          ),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: Colors.blue.withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child:
+                            const Icon(Icons.monitor_heart, color: Colors.blue),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text(
+                          "Lifestyle Assessment",
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    "Fill the fields below, then tap Analyze.",
+                    style: TextStyle(color: Colors.grey[700], fontSize: 12),
+                  ),
+                  const SizedBox(height: 14),
+                  _buildDropdownLarge(
+                      "Gender", ["Female", "Male"], (v) => gender = v),
+                  _buildDropdownLarge(
+                      "Ethnicity",
+                      ["Caucasian", "African", "Asian", "Other"],
+                      (v) => ethnicity = v),
+                  _buildDropdownLarge(
+                      "Education",
+                      ["None", "High School", "Bachelor", "Higher"],
+                      (v) => education = v),
+                  _buildDropdownLarge(
+                      "Smoking", ["No", "Yes"], (v) => smoking = v),
+                  _buildDropdownLarge(
+                      "High BP", ["No", "Yes"], (v) => hypertension = v),
+                  _buildDropdownLarge(
+                      "Diabetes", ["No", "Yes"], (v) => diabetes = v),
+                  _buildDropdownLarge(
+                      "Depression", ["No", "Yes"], (v) => depression = v),
+                  const SizedBox(height: 10),
+                  _buildNumFieldLarge("Age", ageController),
+                  _buildNumFieldLarge("BMI", bmiController),
+                  _buildNumFieldLarge("Alcohol", alcoholController),
+                  _buildNumFieldLarge("Exercise", activityController),
+                  _buildNumFieldLarge("Diet", dietController),
+                  _buildNumFieldLarge("Sleep", sleepController),
+                  _buildNumFieldLarge("Tasks", tasksController),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: OutlinedButton.styleFrom(
+                            minimumSize: const Size.fromHeight(48),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: const Text("Cancel"),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _runLifestyleAnalysis,
+                          style: ElevatedButton.styleFrom(
+                            minimumSize: const Size.fromHeight(48),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: const Text("Analyze"),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDropdownLarge(
+      String label, List<String> items, Function(int) onChanged) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: DropdownButtonFormField<String>(
+        decoration: InputDecoration(
+          labelText: label,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        ),
+        items: items
+            .asMap()
+            .entries
+            .map((e) =>
+                DropdownMenuItem(value: e.key.toString(), child: Text(e.value)))
+            .toList(),
+        onChanged: (val) => onChanged(int.parse(val!)),
+      ),
+    );
+  }
+
+  Widget _buildNumFieldLarge(String label, TextEditingController controller) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TextField(
         controller: controller,
         keyboardType: TextInputType.number,
-        decoration: InputDecoration(labelText: label));
+        decoration: InputDecoration(
+          labelText: label,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        ),
+      ),
+    );
   }
 }
 
+// ===========================
+//     SMALL UI CLASSES
+// ===========================
+class _ModalityUI {
+  final int index;
+  final String stepName;
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final String primaryButton;
+  final String type; // 'image' | 'audio' | 'spiral' | 'lifestyle'
+  final ClassificationModel? model;
+
+  final String explainTitle;
+  final String? explainBody;
+
+  _ModalityUI({
+    required this.index,
+    required this.stepName,
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.primaryButton,
+    required this.type,
+    required this.model,
+    required this.explainTitle,
+    required this.explainBody,
+  });
+}
+
+class _PreviewBox extends StatelessWidget {
+  final Widget child;
+  const _PreviewBox({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 140,
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F3F6),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.black.withOpacity(0.06)),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: child,
+      ),
+    );
+  }
+}
+
+class _StatusPill extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  final Color color;
+
+  const _StatusPill(
+      {required this.icon, required this.text, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w800, color: color),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SmallChip extends StatelessWidget {
+  final String text;
+  final IconData icon;
+  const _SmallChip({required this.text, required this.icon});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.black.withOpacity(0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: Colors.grey[700]),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ===========================
+//  YOUR EXISTING UTIL CLASSES
+// ===========================
 class FaceImageProcessor {
   static Future<Uint8List> process(File imageFile) async {
     final bytes = await imageFile.readAsBytes();
     img.Image? original = img.decodeImage(bytes);
     if (original == null) throw Exception("Invalid Image");
 
-    // 1. Resize to 224x224 (Matches your training)
+    // 1. Resize to 224x224
     img.Image resized = img.copyResize(original, width: 224, height: 224);
 
-    // 2. Grayscale + Blur (Matches your preprocessing: GaussianBlur(3,3))
+    // 2. Grayscale + Blur
     img.Image gray = img.grayscale(resized);
-    img.Image blurred =
-        img.gaussianBlur(gray, radius: 1); // radius 1 approx 3x3 kernel
+    img.Image blurred = img.gaussianBlur(gray, radius: 1);
 
-    // 3. Encode as PNG/JPG to send to PytorchLite
+    // 3. Encode
     return Uint8List.fromList(img.encodePng(blurred));
   }
 }
