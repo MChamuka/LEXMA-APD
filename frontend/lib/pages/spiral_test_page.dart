@@ -87,7 +87,9 @@ class _SpiralTestPageState extends State<SpiralTestPage> {
                         if (pos.dx >= 0 &&
                             pos.dx <= 300 &&
                             pos.dy >= 0 &&
-                            pos.dy <= 300) points.add(pos);
+                            pos.dy <= 300) {
+                          points.add(pos);
+                        }
                       });
                     },
                     onPanEnd: (_) => points.add(null),
@@ -122,8 +124,9 @@ class SpiralPainter extends CustomPainter {
       ..strokeWidth = 4
       ..strokeCap = StrokeCap.round;
     for (int i = 0; i < points.length - 1; i++) {
-      if (points[i] != null && points[i + 1] != null)
+      if (points[i] != null && points[i + 1] != null) {
         canvas.drawLine(points[i]!, points[i + 1]!, p);
+      }
     }
   }
 

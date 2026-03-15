@@ -48,6 +48,7 @@ flutter:
     - assets/models/spiralHandPD.ptl
     - assets/models/ADClock.ptl
     - assets/models/lifestyle.tflite
+    - assets/models/ewadbVoice.ptl
 
     - assets/labels.txt
     - assets/spiral_labels.txt

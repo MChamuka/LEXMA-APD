@@ -30,7 +30,7 @@ class XaiService {
       return null;
     }
 
-    if (probs == null || probs.isEmpty) return null;
+    if (probs.isEmpty) return null;
 
     // We track Index 1 (The "Sick" class)
     double baselineProb = probs.length > 1 ? probs[1] : probs[0];

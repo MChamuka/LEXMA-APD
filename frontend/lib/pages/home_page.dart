@@ -73,8 +73,9 @@ class _HomePageState extends State<HomePage> {
     if (t.contains("alzheimer")) return Colors.redAccent;
     if (t.contains("parkinson")) return Colors.orangeAccent;
     if (t.contains("error")) return Colors.red;
-    if (t.contains("analyzing") || t.contains("recording"))
+    if (t.contains("analyzing") || t.contains("recording")) {
       return Colors.blueGrey;
+    }
     return Colors.grey;
   }
 
@@ -286,8 +287,9 @@ class _HomePageState extends State<HomePage> {
 
   List<double> _oneHot(int selectedIndex, int totalCategories) {
     List<double> output = List.filled(totalCategories, 0.0);
-    if (selectedIndex >= 0 && selectedIndex < totalCategories)
+    if (selectedIndex >= 0 && selectedIndex < totalCategories) {
       output[selectedIndex] = 1.0;
+    }
     return output;
   }
 
@@ -379,8 +381,9 @@ class _HomePageState extends State<HomePage> {
       Map<String, double> nums, Map<String, int> cats, int targetClass,
       {bool flipHypertension = false, bool flipSmoking = false}) {
     Map<String, int> testCats = Map.from(cats);
-    if (flipHypertension)
+    if (flipHypertension) {
       testCats['hypertension'] = (testCats['hypertension'] == 0) ? 1 : 0;
+    }
     if (flipSmoking) testCats['smoking'] = (testCats['smoking'] == 0) ? 1 : 0;
 
     List<double> input = _buildInputRow(nums, testCats);
@@ -573,11 +576,11 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildExplanationPanel(ModalityUI m) {
     List<Widget> chips = [];
-    if (m.index == 0)
+    if (m.index == 0) {
       chips = _faceBiomarkers
           .map((b) => SmallChip(text: b, icon: Icons.visibility))
           .toList();
-    else if (m.index == 2)
+    } else if (m.index == 2)
       chips = _audioBiomarkers
           .map((b) => SmallChip(text: b, icon: Icons.multitrack_audio))
           .toList();
