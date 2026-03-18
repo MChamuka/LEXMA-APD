@@ -36,7 +36,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   // --- MODELS ---
-  ClassificationModel? _faceModel;
+  CustomModel? _faceModel;
   ClassificationModel? _spiralModel;
   ClassificationModel? _audioModel;
   ClassificationModel? _dementiaModel;
@@ -182,22 +182,27 @@ class _HomePageState extends State<HomePage> {
       return await PytorchLite.loadClassificationModel(path, 224, 224, 3,
           labelPath: labelPath);
     } catch (e) {
-      stderr.writeln("❌ LOAD FAILED: $path - $e");
+      stderr.writeln("❌ MODEL LOAD FAILED! Path: $path | Error: $e");
       return null;
     }
   }
 
   Future<void> _loadAllModels() async {
     try {
-      // NOTE: If Face model expects 13 features, loading as an image model will fail during inference.
-      _faceModel = await loadSafePytorch(
-          "assets/models/PDFace.ptl", "assets/PDFace_labels.txt", 2);
+      try {
+        _faceModel = await PytorchLite.loadCustomModel(
+            "assets/models/final_face_model_mobile.ptl");
+      } catch (e) {
+        print("❌ FACE MODEL LOAD FAILED: $e");
+      }
       _spiralModel = await loadSafePytorch(
-          "assets/models/spiralHandPD.ptl", "assets/spiral_labels.txt", 2);
+          "assets/models/spiral_model_mobile.ptl",
+          "assets/spiral_labels.txt",
+          2);
       _audioModel = await loadSafePytorch(
-          "assets/models/ewadbVoice.ptl", "assets/audio_labels.txt", 3);
+          "assets/models/finalADPDVoice.ptl", "assets/audio_labels.txt", 3);
       _dementiaModel = await loadSafePytorch(
-          "assets/models/ADClock.ptl", "assets/labels.txt", 3);
+          "assets/models/finalNhats.ptl", "assets/labels.txt", 3);
       _lifestyleInterpreter =
           await tfl.Interpreter.fromAsset('assets/models/lifestyle.tflite');
     } finally {
@@ -205,8 +210,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // --- 🛠️ MODIFIED IMAGE PICKER (ADDED PREPROCESSING PIPELINES) ---
-  Future<void> _pickImage(int index, ClassificationModel? model) async {
+  Future<void> _pickImage(int index, dynamic model) async {
     if (model == null) return;
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
@@ -222,9 +226,23 @@ class _HomePageState extends State<HomePage> {
         String prediction = "Error";
 
         if (index == 0) {
-          // 1. FACE PIPELINE
-          Uint8List imageBytes = await FaceImageProcessor.process(originalFile);
-          prediction = await model.getImagePrediction(imageBytes);
+          // 1. FACE PIPELINE: Get 13 features
+          List<double>? features =
+              await FaceImageProcessor.process(originalFile);
+
+          if (features == null) {
+            setState(() => _results[0] = "Error: No face detected");
+            return;
+          }
+
+          // Pass the 13 features into the PyTorch CustomModel
+          var output = await (model as CustomModel)
+              .getPrediction(features, [1, 13], DType.float32);
+
+          List<double> probs = List<double>.from(output);
+          int maxIndex = probs[0] > probs[1] ? 0 : 1;
+          prediction = maxIndex == 1 ? "Parkinson's" : "Healthy";
+
           File xaiImage =
               await FaceXAIService.generateHeatmap(originalFile, prediction);
           setState(() {
@@ -232,19 +250,22 @@ class _HomePageState extends State<HomePage> {
             _faceBiomarkers = FaceXAIService.getFaceBiomarkers(prediction);
           });
         } else if (index == 3) {
-          // 2. CLOCK DRAWING PIPELINE (ADDED!)
+          // 2. CLOCK DRAWING PIPELINE
           Uint8List processedClockBytes =
               await ClockProcessor.process(originalFile);
-          prediction = await model.getImagePrediction(processedClockBytes);
+          prediction = await (model as ClassificationModel)
+              .getImagePrediction(processedClockBytes);
         } else {
-          // Fallback
+          // 3. FALLBACK (Spiral)
           Uint8List rawBytes = await originalFile.readAsBytes();
-          prediction = await model.getImagePrediction(rawBytes);
+          prediction =
+              await (model as ClassificationModel).getImagePrediction(rawBytes);
         }
 
         setState(() => _results[index] = prediction);
       } catch (e) {
         setState(() => _results[index] = "Error: $e");
+        print("❌ Pipeline Error at index $index: $e");
       }
     }
   }

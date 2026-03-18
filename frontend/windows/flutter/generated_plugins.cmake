@@ -3,12 +3,14 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  face_detection_tflite
   file_selector_windows
   permission_handler_windows
   record_windows
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
+  flutter_litert
   tflite_flutter
 )
 
