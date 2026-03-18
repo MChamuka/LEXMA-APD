@@ -8,7 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:pytorch_lite/pytorch_lite.dart';
 import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
-
+import '../utils/pytorch_native.dart';
 // --- PAGES ---
 import 'spiral_test_page.dart';
 
@@ -36,7 +36,6 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   // --- MODELS ---
-  CustomModel? _faceModel;
   ClassificationModel? _spiralModel;
   ClassificationModel? _audioModel;
   ClassificationModel? _dementiaModel;
@@ -189,12 +188,6 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _loadAllModels() async {
     try {
-      try {
-        _faceModel = await PytorchLite.loadCustomModel(
-            "assets/models/final_face_model_mobile.ptl");
-      } catch (e) {
-        print("❌ FACE MODEL LOAD FAILED: $e");
-      }
       _spiralModel = await loadSafePytorch(
           "assets/models/spiral_model_mobile.ptl",
           "assets/spiral_labels.txt",
@@ -226,7 +219,7 @@ class _HomePageState extends State<HomePage> {
         String prediction = "Error";
 
         if (index == 0) {
-          // 1. FACE PIPELINE: Get 13 features
+          // 1. Get the 13 mathematical features from the face photo
           List<double>? features =
               await FaceImageProcessor.process(originalFile);
 
@@ -235,11 +228,15 @@ class _HomePageState extends State<HomePage> {
             return;
           }
 
-          // Pass the 13 features into the PyTorch CustomModel
-          var output = await (model as CustomModel)
-              .getPrediction(features, [1, 13], DType.float32);
+          // 2. Send the features to our Native Kotlin Bridge!
+          List<double>? probs = await PyTorchNative.predictFace(features);
 
-          List<double> probs = List<double>.from(output);
+          if (probs == null) {
+            setState(() => _results[0] = "Error: Native Model Failed");
+            return;
+          }
+
+          // 3. Find the highest probability
           int maxIndex = probs[0] > probs[1] ? 0 : 1;
           prediction = maxIndex == 1 ? "Parkinson's" : "Healthy";
 
@@ -247,6 +244,7 @@ class _HomePageState extends State<HomePage> {
               await FaceXAIService.generateHeatmap(originalFile, prediction);
           setState(() {
             _images[0] = xaiImage;
+            _results[0] = prediction;
             _faceBiomarkers = FaceXAIService.getFaceBiomarkers(prediction);
           });
         } else if (index == 3) {

@@ -9,7 +9,7 @@ class ModalityUI {
   final IconData icon;
   final String primaryButton;
   final String type; // 'image' | 'audio' | 'spiral' | 'lifestyle'
-  final ClassificationModel? model;
+  final dynamic model;
   final String explainTitle;
   final String? explainBody;
 
