@@ -143,14 +143,14 @@ class _HomePageState extends State<HomePage> {
         ),
         ModalityUI(
           index: 3,
-          stepName: "MRI",
+          stepName: "ClockDrawing",
           title: "Brain Scan",
-          subtitle: "Upload MRI scan image",
+          subtitle: "Upload ClockDrawing scan image",
           icon: Icons.image_search,
           primaryButton: "Upload Scan",
           type: 'image',
           model: _dementiaModel,
-          explainTitle: "MRI Explanation",
+          explainTitle: "ClockDrawing Explanation",
           explainBody: "After analysis, the diagnosis result will be shown.",
         ),
         ModalityUI(
