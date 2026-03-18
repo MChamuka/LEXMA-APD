@@ -223,7 +223,7 @@ class _HomePageState extends State<HomePage> {
 
         if (index == 0) {
           // 1. FACE PIPELINE
-          Uint8List imageBytes = await FaceProcessor.process(originalFile);
+          Uint8List imageBytes = await FaceImageProcessor.process(originalFile);
           prediction = await model.getImagePrediction(imageBytes);
           File xaiImage =
               await FaceXAIService.generateHeatmap(originalFile, prediction);
