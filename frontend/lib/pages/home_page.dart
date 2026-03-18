@@ -16,7 +16,10 @@ import 'spiral_test_page.dart';
 import '../models/modality_model.dart';
 import '../widgets/ui_components.dart';
 import '../widgets/lifestyle_form_sheet.dart';
+
+// --- UTILS (ADDED PREPROCESSORS HERE) ---
 import '../utils/face_processor.dart';
+import '../utils/clock_processor.dart';
 
 // --- SERVICES ---
 import '../services/lifestyle_service.dart';
@@ -43,14 +46,8 @@ class _HomePageState extends State<HomePage> {
   final AudioRecorder _audioRecorder = AudioRecorder();
   bool _isRecording = false;
 
-  final List<File?> _images = [null, null, null, null, null];
-  final List<String> _results = [
-    "Not Analyzed",
-    "Not Analyzed",
-    "Not Analyzed",
-    "Not Analyzed",
-    "Not Analyzed"
-  ];
+  final List<File?> _images = List.filled(5, null);
+  final List<String> _results = List.filled(5, "Not Analyzed");
 
   List<MapEntry<String, double>> _topFactors = [];
   List<String> _audioBiomarkers = [];
@@ -64,18 +61,15 @@ class _HomePageState extends State<HomePage> {
     HapticFeedback.selectionClick();
   }
 
-  String _shortResult(String s) =>
-      (s.length > 28) ? "${s.substring(0, 28)}..." : s;
-
+  // --- UI HELPERS ---
   Color _resultColor(String r) {
     final t = r.toLowerCase();
     if (t.contains("healthy")) return Colors.green;
     if (t.contains("alzheimer")) return Colors.redAccent;
     if (t.contains("parkinson")) return Colors.orangeAccent;
     if (t.contains("error")) return Colors.red;
-    if (t.contains("analyzing") || t.contains("recording")) {
+    if (t.contains("analyzing") || t.contains("recording"))
       return Colors.blueGrey;
-    }
     return Colors.grey;
   }
 
@@ -100,6 +94,7 @@ class _HomePageState extends State<HomePage> {
   bool _isStepDone(int i) =>
       !_results[i].toLowerCase().contains("not analyzed");
 
+  // --- MODALITIES CONFIG ---
   List<ModalityUI> _mods() => [
         ModalityUI(
           index: 0,
@@ -194,6 +189,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _loadAllModels() async {
     try {
+      // NOTE: If Face model expects 13 features, loading as an image model will fail during inference.
       _faceModel = await loadSafePytorch(
           "assets/models/PDFace.ptl", "assets/PDFace_labels.txt", 2);
       _spiralModel = await loadSafePytorch(
@@ -202,17 +198,14 @@ class _HomePageState extends State<HomePage> {
           "assets/models/ewadbVoice.ptl", "assets/audio_labels.txt", 3);
       _dementiaModel = await loadSafePytorch(
           "assets/models/ADClock.ptl", "assets/labels.txt", 3);
-      try {
-        _lifestyleInterpreter =
-            await tfl.Interpreter.fromAsset('assets/models/lifestyle.tflite');
-      } catch (e) {
-        stderr.writeln("❌ Failed to load Lifestyle TFLite: $e");
-      }
+      _lifestyleInterpreter =
+          await tfl.Interpreter.fromAsset('assets/models/lifestyle.tflite');
     } finally {
       if (mounted) setState(() => _areModelsLoaded = true);
     }
   }
 
+  // --- 🛠️ MODIFIED IMAGE PICKER (ADDED PREPROCESSING PIPELINES) ---
   Future<void> _pickImage(int index, ClassificationModel? model) async {
     if (model == null) return;
     final ImagePicker picker = ImagePicker();
@@ -223,31 +216,40 @@ class _HomePageState extends State<HomePage> {
         _images[index] = File(image.path);
         _results[index] = "Analyzing...";
       });
+
       try {
-        Uint8List imageBytes;
         File originalFile = File(image.path);
+        String prediction = "Error";
 
         if (index == 0) {
-          imageBytes = await FaceImageProcessor.process(originalFile);
-          String prediction = await model.getImagePrediction(imageBytes);
+          // 1. FACE PIPELINE
+          Uint8List imageBytes = await FaceProcessor.process(originalFile);
+          prediction = await model.getImagePrediction(imageBytes);
           File xaiImage =
               await FaceXAIService.generateHeatmap(originalFile, prediction);
           setState(() {
             _images[0] = xaiImage;
-            _results[0] = prediction;
             _faceBiomarkers = FaceXAIService.getFaceBiomarkers(prediction);
           });
+        } else if (index == 3) {
+          // 2. CLOCK DRAWING PIPELINE (ADDED!)
+          Uint8List processedClockBytes =
+              await ClockProcessor.process(originalFile);
+          prediction = await model.getImagePrediction(processedClockBytes);
         } else {
-          imageBytes = await originalFile.readAsBytes();
-          String prediction = await model.getImagePrediction(imageBytes);
-          setState(() => _results[index] = prediction);
+          // Fallback
+          Uint8List rawBytes = await originalFile.readAsBytes();
+          prediction = await model.getImagePrediction(rawBytes);
         }
+
+        setState(() => _results[index] = prediction);
       } catch (e) {
         setState(() => _results[index] = "Error: $e");
       }
     }
   }
 
+  // --- AUDIO HANDLING ---
   Future<void> _handleAudioRecording() async {
     var status = await Permission.microphone.request();
     if (status != PermissionStatus.granted) return;
@@ -285,11 +287,11 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // --- LIFESTYLE TFLITE LOGIC ---
   List<double> _oneHot(int selectedIndex, int totalCategories) {
     List<double> output = List.filled(totalCategories, 0.0);
-    if (selectedIndex >= 0 && selectedIndex < totalCategories) {
+    if (selectedIndex >= 0 && selectedIndex < totalCategories)
       output[selectedIndex] = 1.0;
-    }
     return output;
   }
 
@@ -303,14 +305,15 @@ class _HomePageState extends State<HomePage> {
     row.addAll(_oneHot(cats['hypertension']!, 2));
     row.addAll(_oneHot(cats['diabetes']!, 2));
     row.addAll(_oneHot(cats['depression']!, 2));
-
-    row.add(DataConfig.normalize('Age', numericals['Age']!));
-    row.add(DataConfig.normalize('BMI', numericals['BMI']!));
-    row.add(DataConfig.normalize('Alcohol', numericals['Alcohol']!));
-    row.add(DataConfig.normalize('Activity', numericals['Activity']!));
-    row.add(DataConfig.normalize('Diet', numericals['Diet']!));
-    row.add(DataConfig.normalize('Sleep', numericals['Sleep']!));
-    row.add(DataConfig.normalize('Tasks', numericals['Tasks']!));
+    row.addAll([
+      DataConfig.normalize('Age', numericals['Age']!),
+      DataConfig.normalize('BMI', numericals['BMI']!),
+      DataConfig.normalize('Alcohol', numericals['Alcohol']!),
+      DataConfig.normalize('Activity', numericals['Activity']!),
+      DataConfig.normalize('Diet', numericals['Diet']!),
+      DataConfig.normalize('Sleep', numericals['Sleep']!),
+      DataConfig.normalize('Tasks', numericals['Tasks']!)
+    ]);
     return row;
   }
 
@@ -337,7 +340,6 @@ class _HomePageState extends State<HomePage> {
           : (maxIndex == 1)
               ? "Alzheimer's"
               : "Healthy";
-
       _topFactors.clear();
       if (maxIndex != 2) _calculateXAI(rawNumerical, cats, probs, maxIndex);
 
@@ -352,7 +354,6 @@ class _HomePageState extends State<HomePage> {
   void _calculateXAI(Map<String, double> rawNumerical, Map<String, int> cats,
       List<double> baseProbs, int targetClass) {
     Map<String, double> impactScores = {};
-
     rawNumerical.forEach((key, val) {
       Map<String, double> perturbed = Map.from(rawNumerical);
       perturbed[key] = val + (DataConfig.stds[key] ?? 1.0);
@@ -381,9 +382,8 @@ class _HomePageState extends State<HomePage> {
       Map<String, double> nums, Map<String, int> cats, int targetClass,
       {bool flipHypertension = false, bool flipSmoking = false}) {
     Map<String, int> testCats = Map.from(cats);
-    if (flipHypertension) {
+    if (flipHypertension)
       testCats['hypertension'] = (testCats['hypertension'] == 0) ? 1 : 0;
-    }
     if (flipSmoking) testCats['smoking'] = (testCats['smoking'] == 0) ? 1 : 0;
 
     List<double> input = _buildInputRow(nums, testCats);
@@ -397,20 +397,19 @@ class _HomePageState extends State<HomePage> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => LifestyleFormSheet(
-        onAnalyze: _runLifestyleAnalysis,
-      ),
+      builder: (context) =>
+          LifestyleFormSheet(onAnalyze: _runLifestyleAnalysis),
     );
   }
 
+  // --- UI BUILDING ---
   @override
   Widget build(BuildContext context) {
     return Theme(
       data: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: Colors.blue,
-        scaffoldBackgroundColor: const Color(0xFFF7F8FA),
-      ),
+          useMaterial3: true,
+          colorSchemeSeed: Colors.blue,
+          scaffoldBackgroundColor: const Color(0xFFF7F8FA)),
       child: Scaffold(
         appBar: AppBar(
           title: const Text("LEXMA-APD"),
@@ -434,7 +433,7 @@ class _HomePageState extends State<HomePage> {
                         children: [
                           _buildOverviewCard(),
                           const SizedBox(height: 12),
-                          ..._mods().map((m) => _buildStepCard(m)).toList(),
+                          ..._mods().map((m) => _buildStepCard(m)),
                         ],
                       ),
                     ),
@@ -580,14 +579,15 @@ class _HomePageState extends State<HomePage> {
       chips = _faceBiomarkers
           .map((b) => SmallChip(text: b, icon: Icons.visibility))
           .toList();
-    } else if (m.index == 2)
+    } else if (m.index == 2) {
       chips = _audioBiomarkers
           .map((b) => SmallChip(text: b, icon: Icons.multitrack_audio))
           .toList();
-    else if (m.index == 4)
+    } else if (m.index == 4) {
       chips = _topFactors
           .map((e) => SmallChip(text: e.key, icon: Icons.analytics))
           .toList();
+    }
 
     return Container(
       padding: const EdgeInsets.all(8),

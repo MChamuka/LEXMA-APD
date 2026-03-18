@@ -24,6 +24,7 @@ dependencies:
   # --- AI ENGINES ---
   pytorch_lite: ^4.3.0
   tflite_flutter: ^0.11.0
+  opencv_dart: ^2.2.1+4
 
 dev_dependencies:
   flutter_test:
