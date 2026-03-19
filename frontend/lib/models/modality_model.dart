@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:pytorch_lite/pytorch_lite.dart';
 
 class ModalityUI {
   final int index;
