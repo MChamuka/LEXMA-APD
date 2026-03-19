@@ -98,12 +98,14 @@ class _SpiralTestPageState extends State<SpiralTestPage> {
       // 6. Run Prediction
       List<double> probs =
           await widget.model.getImagePredictionList(inputBytes);
-      // The sigmoid model outputs the probability of class 1 (Parkinson's)
+
+      // The model outputs the probability of Parkinson's
       double pdProb = probs[0];
-      double healthyProb = 1.0 - pdProb;
-      // Create a highly detailed diagnostic string instead of just a word!
+
+      // Create a clean diagnostic string for the Home Page UI badge
       String prediction =
-          "PD: ${(pdProb * 100).toStringAsFixed(4)}% | Healthy: ${(healthyProb * 100).toStringAsFixed(4)}%";
+          pdProb > 0.5 ? "Parkinson's Detected" : "Healthy Pattern";
+
       // 7. DIAGNOSTIC MODE: Save the AI's "X-Ray" image and send it to the UI
       final tempDir = await getTemporaryDirectory();
       File xrayFile = File(
@@ -113,8 +115,8 @@ class _SpiralTestPageState extends State<SpiralTestPage> {
       if (mounted) {
         Navigator.pop(context, {
           'image': xrayFile,
-          'prediction':
-              prediction, // This will display the exact raw numbers on the Home Page!
+          'prediction': prediction,
+          'probability': pdProb, // 🔥 THIS IS THE CRITICAL LINE FOR FUSION!
         });
       }
     } catch (e) {
