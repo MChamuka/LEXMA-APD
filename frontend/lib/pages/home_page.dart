@@ -49,6 +49,9 @@ class _HomePageState extends State<HomePage> {
   final List<File?> _images = List.filled(5, null);
   final List<String> _results = List.filled(5, "Not Analyzed");
 
+  // 🔥 NEW: Array to store raw probabilities for Decision-Level Fusion
+  final List<double?> _probs = List.filled(5, null);
+
   List<MapEntry<String, double>> _topFactors = [];
   List<String> _audioBiomarkers = [];
   List<String> _faceBiomarkers = [];
@@ -139,7 +142,7 @@ class _HomePageState extends State<HomePage> {
         ModalityUI(
           index: 3,
           stepName: "CDT",
-          title: "Clock Drawing Test",
+          title: "Clock Drawing",
           subtitle: "Upload ClockDrawing image",
           icon: Icons.image_search,
           primaryButton: "Upload CDT",
@@ -220,72 +223,52 @@ class _HomePageState extends State<HomePage> {
         String prediction = "Error";
 
         if (index == 0) {
-          // 1. Get the Care Package from the Processor
           final faceData = await FaceImageProcessor.process(originalFile);
-
           if (faceData == null) {
             setState(() => _results[0] = "Error: No face detected");
             return;
           }
 
-          // Unpack the features and the landmarks
           List<double> features = faceData['features'];
           Map<String, List<double>> landmarks = faceData['landmarks'];
 
-          // 2. Send the features to our Native Kotlin Bridge!
           List<double> probs = await PyTorchNative.predictFace(features);
-
           double score = probs[0];
           prediction = score > 0.5 ? "Parkinson's" : "Healthy";
 
-          // 3. Generate XAI (Now we pass the exact landmarks to the artist!)
           File xaiImage = await FaceXAIService.generateHeatmap(
               originalFile, prediction, landmarks);
 
           setState(() {
             _images[0] = xaiImage;
             _results[0] = prediction;
+            _probs[0] = score; // 🔥 Save raw probability for fusion
             _faceBiomarkers = FaceXAIService.getFaceBiomarkers(prediction);
           });
         } else if (index == 3) {
-          // 2. CLOCK DRAWING PIPELINE
           Uint8List processedClockBytes =
               await ClockProcessor.process(originalFile);
-
-          // Get the raw list of probabilities [Healthy, Alzheimer's] instead of a string
           List<double> probs = await (model as ClassificationModel)
               .getImagePredictionList(processedClockBytes);
 
-          // In your Python code: index 0 is Healthy, index 1 is Alzheimer's.
-          // If the Alzheimer's probability is higher, flag it!
-          prediction = probs[1] > probs[0] ? "Alzheimer's" : "Healthy";
-
-          // Generate the Thermal Stroke XAI
+          double adProb = probs[1];
+          prediction = adProb > 0.5 ? "Alzheimer's" : "Healthy";
           File xaiImage =
               await ClockXAIService.generateHeatmap(originalFile, prediction);
 
           setState(() {
             _images[3] = xaiImage;
             _results[3] = prediction;
+            _probs[3] = adProb; // 🔥 Save raw probability for fusion
             _faceBiomarkers = ClockXAIService.getClockBiomarkers(prediction);
           });
-        } else {
-          // 3. FALLBACK (Spiral)
-          Uint8List rawBytes = await originalFile.readAsBytes();
-          prediction =
-              await (model as ClassificationModel).getImagePrediction(rawBytes);
         }
-
-        // Update the final UI text
-        setState(() => _results[index] = prediction);
       } catch (e) {
         setState(() => _results[index] = "Error: $e");
-        print("Pipeline Error at index $index: $e");
       }
     }
   }
 
-  // --- AUDIO HANDLING ---
   Future<void> _handleAudioRecording() async {
     var status = await Permission.microphone.request();
     if (status != PermissionStatus.granted) return;
@@ -308,12 +291,19 @@ class _HomePageState extends State<HomePage> {
         try {
           File rawSpec = await AudioService.generateV2Spectrogram(path);
           Uint8List bytes = await rawSpec.readAsBytes();
-          String prediction = await _audioModel!.getImagePrediction(bytes);
+
+          // 🔥 We changed this to PredictionList to get raw probabilities!
+          List<double> vProbs =
+              await _audioModel!.getImagePredictionList(bytes);
+          double vScore = vProbs[1]; // Assuming index 1 is pathological/PD
+          String prediction = vScore > 0.5 ? "Parkinson's Detected" : "Healthy";
+
           File heatmap =
               await AudioXAIService.generateHeatmap(rawSpec, prediction);
           setState(() {
             _images[2] = heatmap;
             _results[2] = prediction;
+            _probs[2] = vScore; // 🔥 Save raw probability for fusion
             _audioBiomarkers = AudioXAIService.getBiomarkers(prediction);
           });
         } catch (e) {
@@ -323,7 +313,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // --- LIFESTYLE TFLITE LOGIC ---
   List<double> _oneHot(int selectedIndex, int totalCategories) {
     List<double> output = List.filled(totalCategories, 0.0);
     if (selectedIndex >= 0 && selectedIndex < totalCategories)
@@ -379,8 +368,10 @@ class _HomePageState extends State<HomePage> {
       _topFactors.clear();
       if (maxIndex != 2) _calculateXAI(rawNumerical, cats, probs, maxIndex);
 
-      setState(
-          () => _results[4] = "$diag (${(maxVal * 100).toStringAsFixed(1)}%)");
+      setState(() {
+        _results[4] = "$diag (${(maxVal * 100).toStringAsFixed(1)}%)";
+        _probs[4] = maxVal; // 🔥 Save raw probability for fusion
+      });
     } catch (e) {
       setState(() => _results[4] = "Error");
     }
@@ -403,7 +394,6 @@ class _HomePageState extends State<HomePage> {
     double baseHypScore = _testCategoricalFlip(rawNumerical, cats, targetClass,
         flipHypertension: true);
     impactScores['High BP'] = (baseProbs[targetClass] - baseHypScore).abs();
-
     double baseSmokeScore = _testCategoricalFlip(
         rawNumerical, cats, targetClass,
         flipSmoking: true);
@@ -421,7 +411,6 @@ class _HomePageState extends State<HomePage> {
     if (flipHypertension)
       testCats['hypertension'] = (testCats['hypertension'] == 0) ? 1 : 0;
     if (flipSmoking) testCats['smoking'] = (testCats['smoking'] == 0) ? 1 : 0;
-
     List<double> input = _buildInputRow(nums, testCats);
     var output = List.filled(1 * 3, 0.0).reshape([1, 3]);
     _lifestyleInterpreter!.run([input], output);
@@ -437,6 +426,146 @@ class _HomePageState extends State<HomePage> {
           LifestyleFormSheet(onAnalyze: _runLifestyleAnalysis),
     );
   }
+
+  // ==========================================
+  // 🔥 THE NEW MULTIMODAL FUSION DASHBOARD 🔥
+  // ==========================================
+  Widget _buildFusionDashboard() {
+    // 1. Calculate the dynamic fusion score
+    double totalWeight = 0;
+    double fusedProb = 0;
+
+    // We average any modality that has been completed
+    for (int i = 0; i < 5; i++) {
+      if (_probs[i] != null) {
+        fusedProb += _probs[i]!;
+        totalWeight++;
+      }
+    }
+
+    // If no tests are done, show standard header
+    if (totalWeight == 0) {
+      return Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.hub, color: Colors.blue),
+            const SizedBox(width: 12),
+            const Expanded(
+                child: Text("Decision-Level Fusion",
+                    style: TextStyle(fontWeight: FontWeight.bold))),
+            TextButton(
+                onPressed: () => _setStep((_currentStep + 1).clamp(0, 4)),
+                child: const Text("Start"))
+          ],
+        ),
+      );
+    }
+
+    // Perform Final Calculation
+    fusedProb = fusedProb / totalWeight;
+    bool isDetected = fusedProb > 0.5;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: isDetected
+              ? [Colors.red.shade50, Colors.orange.shade50]
+              : [Colors.green.shade50, Colors.teal.shade50],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+            color: isDetected
+                ? Colors.red.withOpacity(0.3)
+                : Colors.green.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.hub, color: isDetected ? Colors.red : Colors.green),
+              const SizedBox(width: 8),
+              const Text("MULTIMODAL FUSION ENGINE",
+                  style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 13,
+                      letterSpacing: 1.2)),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // List out the active modalities
+          if (_probs[0] != null) _buildFusionRow("Face Model", _probs[0]!),
+          if (_probs[1] != null) _buildFusionRow("Spiral Model", _probs[1]!),
+          if (_probs[2] != null) _buildFusionRow("Voice Model", _probs[2]!),
+          if (_probs[3] != null) _buildFusionRow("CDT Model", _probs[3]!),
+          if (_probs[4] != null) _buildFusionRow("Lifestyle Data", _probs[4]!),
+
+          const Divider(height: 24),
+
+          // Final Output
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("Final Multimodal Score",
+                      style: TextStyle(fontSize: 12, color: Colors.black54)),
+                  Text("${(fusedProb * 100).toStringAsFixed(1)}%",
+                      style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w900,
+                          color: isDetected ? Colors.red : Colors.green)),
+                ],
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: isDetected ? Colors.red : Colors.green,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  isDetected ? "Anomaly Detected" : "Healthy Pattern",
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              )
+            ],
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFusionRow(String label, double prob) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text("↳ $label",
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87)),
+          Text("${(prob * 100).toStringAsFixed(1)}%",
+              style:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+        ],
+      ),
+    );
+  }
+  // ==========================================
 
   // --- UI BUILDING ---
   @override
@@ -467,7 +596,7 @@ class _HomePageState extends State<HomePage> {
                       child: ListView(
                         padding: const EdgeInsets.all(16),
                         children: [
-                          _buildOverviewCard(),
+                          _buildFusionDashboard(), // 🔥 Replaced the old Overview Card!
                           const SizedBox(height: 12),
                           ..._mods().map((m) => _buildStepCard(m)),
                         ],
@@ -518,30 +647,13 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildOverviewCard() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      color: Colors.white,
-      child: Row(
-        children: [
-          const Icon(Icons.medical_information, color: Colors.blue),
-          const SizedBox(width: 12),
-          const Expanded(
-              child: Text("Guided Screening",
-                  style: TextStyle(fontWeight: FontWeight.bold))),
-          TextButton(
-              onPressed: () => _setStep((_currentStep + 1).clamp(0, 4)),
-              child: const Text("Next"))
-        ],
-      ),
-    );
-  }
-
   Widget _buildStepCard(ModalityUI m) {
     final idx = m.index;
     final result = _results[idx];
     final color = _resultColor(result);
-    final isMissing = (m.type != 'lifestyle') && (m.model == null);
+    final isMissing = (m.type != 'lifestyle') &&
+        (m.model == null) &&
+        (m.model != "native_bridge");
 
     return Card(
       margin: const EdgeInsets.only(bottom: 14),
@@ -572,10 +684,12 @@ class _HomePageState extends State<HomePage> {
                       : Center(
                           child: Icon(m.icon, size: 42, color: Colors.grey)))
             else if (m.type == 'spiral')
-              const PreviewBox(
-                  child: Center(
-                      child:
-                          Icon(Icons.gesture, size: 50, color: Colors.grey))),
+              PreviewBox(
+                  child: _images[idx] != null
+                      ? Image.file(_images[idx]!, fit: BoxFit.contain)
+                      : const Center(
+                          child: Icon(Icons.gesture,
+                              size: 50, color: Colors.grey))),
             const SizedBox(height: 10),
             Text("Result: $result",
                 style: TextStyle(color: color, fontWeight: FontWeight.bold)),
@@ -584,14 +698,22 @@ class _HomePageState extends State<HomePage> {
             ElevatedButton.icon(
               onPressed: isMissing
                   ? null
-                  : () {
+                  : () async {
                       _setStep(idx);
                       if (m.type == 'spiral') {
-                        Navigator.push(
+                        final resultData = await Navigator.push(
                             context,
                             MaterialPageRoute(
                                 builder: (c) =>
                                     SpiralTestPage(model: _spiralModel!)));
+                        if (resultData != null && resultData is Map) {
+                          setState(() {
+                            _images[idx] = resultData['image'];
+                            _results[idx] = resultData['prediction'];
+                            _probs[idx] = resultData[
+                                'probability']; // 🔥 Captures spiral probability!
+                          });
+                        }
                       } else if (m.type == 'audio') {
                         _handleAudioRecording();
                       } else if (m.type == 'lifestyle') {
@@ -611,19 +733,18 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildExplanationPanel(ModalityUI m) {
     List<Widget> chips = [];
-    if (m.index == 0) {
+    if (m.index == 0)
       chips = _faceBiomarkers
           .map((b) => SmallChip(text: b, icon: Icons.visibility))
           .toList();
-    } else if (m.index == 2) {
+    else if (m.index == 2)
       chips = _audioBiomarkers
           .map((b) => SmallChip(text: b, icon: Icons.multitrack_audio))
           .toList();
-    } else if (m.index == 4) {
+    else if (m.index == 4)
       chips = _topFactors
           .map((e) => SmallChip(text: e.key, icon: Icons.analytics))
           .toList();
-    }
 
     return Container(
       padding: const EdgeInsets.all(8),

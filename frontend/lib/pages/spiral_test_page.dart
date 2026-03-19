@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:pytorch_lite/pytorch_lite.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
+import 'package:flutter/services.dart' show rootBundle;
 
 class SpiralTestPage extends StatefulWidget {
   final ClassificationModel model;
@@ -29,36 +30,91 @@ class _SpiralTestPageState extends State<SpiralTestPage> {
   Future<void> _analyzeDrawing() async {
     setState(() => _isAnalyzing = true);
     try {
-      // 1. Capture the drawing
+      // 1. Capture the transparent drawing from the UI
       RenderRepaintBoundary boundary = _drawingKey.currentContext!
           .findRenderObject() as RenderRepaintBoundary;
       ui.Image image = await boundary.toImage(pixelRatio: 2.0);
       ByteData? byteData =
           await image.toByteData(format: ui.ImageByteFormat.png);
       Uint8List rawBytes = byteData!.buffer.asUint8List();
+      img.Image transparentDrawing = img.decodeImage(rawBytes)!;
 
-      // 2. Save the raw drawing to a File so HomePage can display it
+      // 2. Load the Template Asset
+      ByteData templateByteData =
+          await rootBundle.load('assets/spiral_template.png');
+      img.Image templateImg =
+          img.decodeImage(templateByteData.buffer.asUint8List())!;
+
+      // Resize drawing to match template and paste the ink onto it
+      img.Image compositedImg = img.copyResize(transparentDrawing,
+          width: templateImg.width, height: templateImg.height);
+      img.compositeImage(templateImg, compositedImg);
+
+      // 3. Convert to Grayscale
+      img.Image gray = img.grayscale(templateImg);
+
+      // 4. THE MAGIC: Mimic Python's cv2.THRESH_BINARY_INV!
+      int w = gray.width;
+      int h = gray.height;
+      int minX = w, minY = h, maxX = 0, maxY = 0;
+
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          var pixel = gray.getPixel(x, y);
+
+          // Invert logic: Dark ink becomes PURE WHITE, Light paper becomes PURE BLACK
+          if (pixel.luminance < 150) {
+            pixel.r = 255;
+            pixel.g = 255;
+            pixel.b = 255; // White ink
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          } else {
+            pixel.r = 0;
+            pixel.g = 0;
+            pixel.b = 0; // Black paper
+          }
+        }
+      }
+
+      // 5. Smart Crop tightly around the white lines
+      img.Image finalImage;
+      if (minX <= maxX && minY <= maxY) {
+        int pad = 20;
+        minX = (minX - pad).clamp(0, w - 1);
+        minY = (minY - pad).clamp(0, h - 1);
+        maxX = (maxX + pad).clamp(0, w - 1);
+        maxY = (maxY + pad).clamp(0, h - 1);
+
+        img.Image cropped = img.copyCrop(gray,
+            x: minX, y: minY, width: maxX - minX, height: maxY - minY);
+        finalImage = img.copyResize(cropped, width: 224, height: 224);
+      } else {
+        finalImage = img.copyResize(gray, width: 224, height: 224);
+      }
+      Uint8List inputBytes = Uint8List.fromList(img.encodeJpg(finalImage));
+      // 6. Run Prediction
+      List<double> probs =
+          await widget.model.getImagePredictionList(inputBytes);
+      // The sigmoid model outputs the probability of class 1 (Parkinson's)
+      double pdProb = probs[0];
+      double healthyProb = 1.0 - pdProb;
+      // Create a highly detailed diagnostic string instead of just a word!
+      String prediction =
+          "PD: ${(pdProb * 100).toStringAsFixed(4)}% | Healthy: ${(healthyProb * 100).toStringAsFixed(4)}%";
+      // 7. DIAGNOSTIC MODE: Save the AI's "X-Ray" image and send it to the UI
       final tempDir = await getTemporaryDirectory();
-      File originalFile = File(
-          '${tempDir.path}/spiral_${DateTime.now().millisecondsSinceEpoch}.png');
-      await originalFile.writeAsBytes(rawBytes);
+      File xrayFile = File(
+          '${tempDir.path}/xray_spiral_${DateTime.now().millisecondsSinceEpoch}.jpg');
+      await xrayFile.writeAsBytes(inputBytes);
 
-      // 3. Process for PyTorch (Resize to 224x224)
-      img.Image processed = img.decodeImage(rawBytes)!;
-      img.Image resized = img.copyResize(processed, width: 224, height: 224);
-      Uint8List input = Uint8List.fromList(img.encodeJpg(resized));
-
-      // 4. Run the Binary Model Prediction
-      List<double> probs = await widget.model.getImagePredictionList(input);
-      double score = probs[0];
-
-      String prediction = (score > 0.5) ? "Parkinson's" : "Healthy";
-
-      // 5. Instantly close the page and send the Care Package back to Home!
       if (mounted) {
         Navigator.pop(context, {
-          'image': originalFile,
-          'prediction': prediction,
+          'image': xrayFile,
+          'prediction':
+              prediction, // This will display the exact raw numbers on the Home Page!
         });
       }
     } catch (e) {
@@ -78,7 +134,7 @@ class _SpiralTestPageState extends State<SpiralTestPage> {
           child: Center(
             child: Stack(alignment: Alignment.center, children: [
               Opacity(
-                  opacity: 0.1,
+                  opacity: 1,
                   child: Image.asset("assets/spiral_template.png",
                       width: 300, height: 300)),
               RepaintBoundary(
@@ -86,8 +142,7 @@ class _SpiralTestPageState extends State<SpiralTestPage> {
                 child: Container(
                   width: 300,
                   height: 300,
-                  // FIX 1: Pure white background instead of transparent!
-                  color: Colors.white,
+                  color: Colors.transparent,
                   child: GestureDetector(
                     onPanUpdate: (d) {
                       setState(() {
@@ -130,9 +185,9 @@ class SpiralPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     Paint p = Paint()
-      // FIX 2: Black ink creates better ML contrast than blue
-      ..color = Colors.black
-      ..strokeWidth = 4
+      ..color = Colors.blue.shade900
+      // FIX: Increased from 4 to 12 so the AI can actually see the lines after resizing!
+      ..strokeWidth = 4.0
       ..strokeCap = StrokeCap.round;
     for (int i = 0; i < points.length - 1; i++) {
       if (points[i] != null && points[i + 1] != null) {
