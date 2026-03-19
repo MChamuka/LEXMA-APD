@@ -196,7 +196,7 @@ class _HomePageState extends State<HomePage> {
       _audioModel = await loadSafePytorch(
           "assets/models/finalADPDVoice.ptl", "assets/audio_labels.txt", 3);
       _dementiaModel = await loadSafePytorch(
-          "assets/models/finalNhats.ptl", "assets/labels.txt", 2);
+          "assets/models/finalNhats_fixed.ptl", "assets/labels.txt", 2);
       _lifestyleInterpreter =
           await tfl.Interpreter.fromAsset('assets/models/lifestyle.tflite');
     } finally {

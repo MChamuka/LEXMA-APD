@@ -48,7 +48,7 @@ flutter:
   assets:
     - assets/models/final_face_model_mobile.ptl
     - assets/models/spiral_model_mobile.ptl
-    - assets/models/finalNhats.ptl
+    - assets/models/finalNhats_fixed.ptl
     - assets/models/lifestyle.tflite
     - assets/models/finalADPDVoice.ptl
 
