@@ -26,6 +26,7 @@ import '../services/lifestyle_service.dart';
 import '../services/audio_sevice.dart';
 import '../services/audio_xai_service.dart';
 import '../services/face_xai_service.dart';
+import '../services/clock_xai_service.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -137,11 +138,11 @@ class _HomePageState extends State<HomePage> {
         ),
         ModalityUI(
           index: 3,
-          stepName: "ClockDrawing",
-          title: "Brain Scan",
-          subtitle: "Upload ClockDrawing scan image",
+          stepName: "CDT",
+          title: "Clock Drawing Test",
+          subtitle: "Upload ClockDrawing image",
           icon: Icons.image_search,
-          primaryButton: "Upload Scan",
+          primaryButton: "Upload CDT",
           type: 'image',
           model: _dementiaModel,
           explainTitle: "ClockDrawing Explanation",
@@ -195,7 +196,7 @@ class _HomePageState extends State<HomePage> {
       _audioModel = await loadSafePytorch(
           "assets/models/finalADPDVoice.ptl", "assets/audio_labels.txt", 3);
       _dementiaModel = await loadSafePytorch(
-          "assets/models/finalNhats.ptl", "assets/labels.txt", 3);
+          "assets/models/finalNhats.ptl", "assets/labels.txt", 2);
       _lifestyleInterpreter =
           await tfl.Interpreter.fromAsset('assets/models/lifestyle.tflite');
     } finally {
@@ -219,28 +220,28 @@ class _HomePageState extends State<HomePage> {
         String prediction = "Error";
 
         if (index == 0) {
-          // 1. Get the 13 mathematical features from the face photo
-          List<double>? features =
-              await FaceImageProcessor.process(originalFile);
+          // 1. Get the Care Package from the Processor
+          final faceData = await FaceImageProcessor.process(originalFile);
 
-          if (features == null) {
+          if (faceData == null) {
             setState(() => _results[0] = "Error: No face detected");
             return;
           }
 
+          // Unpack the features and the landmarks
+          List<double> features = faceData['features'];
+          Map<String, List<double>> landmarks = faceData['landmarks'];
+
           // 2. Send the features to our Native Kotlin Bridge!
           List<double> probs = await PyTorchNative.predictFace(features);
 
-          // 3. Evaluate the single probability score to fix the RangeError!
           double score = probs[0];
-
-          // If score > 0.5, it classifies as Parkinson's.
-          // (Note: If your model outputs 0 for Parkinson's and 1 for Healthy, just change the > to a < )
           prediction = score > 0.5 ? "Parkinson's" : "Healthy";
 
-          // 4. Generate Explainable AI heatmaps and biomarkers
-          File xaiImage =
-              await FaceXAIService.generateHeatmap(originalFile, prediction);
+          // 3. Generate XAI (Now we pass the exact landmarks to the artist!)
+          File xaiImage = await FaceXAIService.generateHeatmap(
+              originalFile, prediction, landmarks);
+
           setState(() {
             _images[0] = xaiImage;
             _results[0] = prediction;
@@ -250,8 +251,24 @@ class _HomePageState extends State<HomePage> {
           // 2. CLOCK DRAWING PIPELINE
           Uint8List processedClockBytes =
               await ClockProcessor.process(originalFile);
-          prediction = await (model as ClassificationModel)
-              .getImagePrediction(processedClockBytes);
+
+          // Get the raw list of probabilities [Healthy, Alzheimer's] instead of a string
+          List<double> probs = await (model as ClassificationModel)
+              .getImagePredictionList(processedClockBytes);
+
+          // In your Python code: index 0 is Healthy, index 1 is Alzheimer's.
+          // If the Alzheimer's probability is higher, flag it!
+          prediction = probs[1] > probs[0] ? "Alzheimer's" : "Healthy";
+
+          // Generate the Thermal Stroke XAI
+          File xaiImage =
+              await ClockXAIService.generateHeatmap(originalFile, prediction);
+
+          setState(() {
+            _images[3] = xaiImage;
+            _results[3] = prediction;
+            _faceBiomarkers = ClockXAIService.getClockBiomarkers(prediction);
+          });
         } else {
           // 3. FALLBACK (Spiral)
           Uint8List rawBytes = await originalFile.readAsBytes();
@@ -551,7 +568,7 @@ class _HomePageState extends State<HomePage> {
             if (m.type == 'image' || m.type == 'audio')
               PreviewBox(
                   child: _images[idx] != null
-                      ? Image.file(_images[idx]!, fit: BoxFit.cover)
+                      ? Image.file(_images[idx]!, fit: BoxFit.contain)
                       : Center(
                           child: Icon(m.icon, size: 42, color: Colors.grey)))
             else if (m.type == 'spiral')
