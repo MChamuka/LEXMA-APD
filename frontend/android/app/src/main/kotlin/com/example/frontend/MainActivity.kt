@@ -5,7 +5,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import org.pytorch.IValue
-import org.pytorch.LiteModuleLoader
+import org.pytorch.Module
 import org.pytorch.Tensor
 import java.io.File
 
@@ -29,8 +29,8 @@ class MainActivity: FlutterActivity() {
                         val shape = longArrayOf(1, 13)
                         val tensor = Tensor.fromBlob(floatArray, shape)
 
-                        // 3. Load the model and run the prediction
-                        val module = LiteModuleLoader.load(modelPath)
+                        // 3. Load the model and run the prediction (Updated for PyTorch 2.1.0)
+                        val module = Module.load(modelPath)
                         val outputTensor = module.forward(IValue.from(tensor)).toTensor()
                         val scores = outputTensor.dataAsFloatArray
 

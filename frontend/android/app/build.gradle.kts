@@ -51,3 +51,11 @@ android {
 flutter {
     source = "../.."
 }
+configurations.all {
+    exclude(group = "org.tensorflow", module = "tensorflow-lite")
+    exclude(group = "org.tensorflow", module = "tensorflow-lite-api")
+    exclude(group = "org.tensorflow", module = "tensorflow-lite-gpu")
+}
+dependencies {
+    implementation("org.pytorch:pytorch_android:2.1.0")
+}

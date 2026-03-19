@@ -103,7 +103,7 @@ class _HomePageState extends State<HomePage> {
           icon: Icons.face_retouching_natural,
           primaryButton: "Upload Photo",
           type: 'image',
-          model: _faceModel,
+          model: "native_bridge",
           explainTitle: "Face Explanation",
           explainBody: _faceBiomarkers.isEmpty
               ? "After analysis, key facial biomarkers will appear here."
@@ -229,12 +229,7 @@ class _HomePageState extends State<HomePage> {
           }
 
           // 2. Send the features to our Native Kotlin Bridge!
-          List<double>? probs = await PyTorchNative.predictFace(features);
-
-          if (probs == null) {
-            setState(() => _results[0] = "Error: Native Model Failed");
-            return;
-          }
+          List<double> probs = await PyTorchNative.predictFace(features);
 
           // 3. Find the highest probability
           int maxIndex = probs[0] > probs[1] ? 0 : 1;
