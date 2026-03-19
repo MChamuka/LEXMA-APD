@@ -181,7 +181,7 @@ class _HomePageState extends State<HomePage> {
       return await PytorchLite.loadClassificationModel(path, 224, 224, 3,
           labelPath: labelPath);
     } catch (e) {
-      stderr.writeln("❌ MODEL LOAD FAILED! Path: $path | Error: $e");
+      stderr.writeln("MODEL LOAD FAILED! Path: $path | Error: $e");
       return null;
     }
   }
@@ -231,10 +231,14 @@ class _HomePageState extends State<HomePage> {
           // 2. Send the features to our Native Kotlin Bridge!
           List<double> probs = await PyTorchNative.predictFace(features);
 
-          // 3. Find the highest probability
-          int maxIndex = probs[0] > probs[1] ? 0 : 1;
-          prediction = maxIndex == 1 ? "Parkinson's" : "Healthy";
+          // 3. Evaluate the single probability score to fix the RangeError!
+          double score = probs[0];
 
+          // If score > 0.5, it classifies as Parkinson's.
+          // (Note: If your model outputs 0 for Parkinson's and 1 for Healthy, just change the > to a < )
+          prediction = score > 0.5 ? "Parkinson's" : "Healthy";
+
+          // 4. Generate Explainable AI heatmaps and biomarkers
           File xaiImage =
               await FaceXAIService.generateHeatmap(originalFile, prediction);
           setState(() {
@@ -255,10 +259,11 @@ class _HomePageState extends State<HomePage> {
               await (model as ClassificationModel).getImagePrediction(rawBytes);
         }
 
+        // Update the final UI text
         setState(() => _results[index] = prediction);
       } catch (e) {
         setState(() => _results[index] = "Error: $e");
-        print("❌ Pipeline Error at index $index: $e");
+        print("Pipeline Error at index $index: $e");
       }
     }
   }
