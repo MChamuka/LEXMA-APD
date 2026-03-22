@@ -200,9 +200,7 @@ class _HomePageState extends State<HomePage> {
           "assets/spiral_labels.txt",
           2);
       _audioModel = await loadSafePytorch(
-          "assets/models/finalADPDVoice_fixed_probs.ptl",
-          "assets/audio_labels.txt",
-          3);
+          "assets/models/voice_pure.ptl", "assets/audio_labels.txt", 3);
       _dementiaModel = await loadSafePytorch(
           "assets/models/finalNhats_fixed.ptl", "assets/labels.txt", 2);
       _lifestyleInterpreter =
@@ -315,10 +313,11 @@ class _HomePageState extends State<HomePage> {
 
     if (!_isRecording) {
       final directory = await getTemporaryDirectory();
-      // 🔥 Timestamp added here to prevent Flutter from caching the audio file
       String path =
           '${directory.path}/temp_audio_${DateTime.now().millisecondsSinceEpoch}.wav';
-      await _audioRecorder.start(const RecordConfig(encoder: AudioEncoder.wav),
+      await _audioRecorder.start(
+          const RecordConfig(
+              encoder: AudioEncoder.wav, sampleRate: 22050, numChannels: 1),
           path: path);
       setState(() {
         _isRecording = true;
@@ -331,30 +330,48 @@ class _HomePageState extends State<HomePage> {
       if (path != null && _audioModel != null) {
         setState(() => _results[2] = "Analyzing...");
         try {
-          // 1. Use the new AudioProcessor! It does the Librosa math and outputs perfect bytes.
           Uint8List processedBytes = await AudioProcessor.process(File(path));
 
-          // 2. Save those bytes to a dynamic file to fix the Flutter Image Caching bug
           final tempDir = await getTemporaryDirectory();
           File rawSpec = File(
               '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.jpg');
           await rawSpec.writeAsBytes(processedBytes);
 
-          // 3. Feed the perfect bytes straight to the model
+          // 1. Get the raw, massive numbers from the model
           List<double> probs =
               await _audioModel!.getImagePredictionList(processedBytes);
+          String rawArrayText = probs.toString();
 
           double adProb = 0.0;
           double pdProb = 0.0;
           double healthyProb = 0.0;
 
+          // 🔥 THE FIX: Temperature Scaling + Softmax
           if (probs.isNotEmpty && probs.length == 3) {
-            adProb = probs[0]; // Alzheimer's
-            pdProb = probs[1]; // Parkinson's
-            healthyProb = probs[2]; // Healthy
+            // Cool down the massive logits so the math doesn't explode
+            // (You can adjust this number. Higher = smoother/closer percentages)
+            double temperature = 250.0;
+
+            double logit0 = probs[0] / temperature;
+            double logit1 = probs[1] / temperature;
+            double logit2 = probs[2] / temperature;
+
+            // Find the highest scaled score
+            double maxVal = math.max(logit0, math.max(logit1, logit2));
+
+            // Calculate exponentials
+            double exp0 = math.exp(logit0 - maxVal);
+            double exp1 = math.exp(logit1 - maxVal);
+            double exp2 = math.exp(logit2 - maxVal);
+
+            double sumExp = exp0 + exp1 + exp2;
+
+            // Convert to perfect, realistic 0.0 - 1.0 percentages!
+            adProb = exp0 / sumExp; // Index 0: Alzheimer's
+            pdProb = exp1 / sumExp; // Index 1: Parkinson's
+            healthyProb = exp2 / sumExp; // Index 2: Healthy
           }
 
-          // Total Anomaly Score for the Multimodal Fusion Dashboard
           double overallAnomalyScore = adProb + pdProb;
 
           String prediction = "Healthy Pattern";
@@ -365,9 +382,8 @@ class _HomePageState extends State<HomePage> {
           }
 
           String uiText =
-              "$prediction\nAD: ${(adProb * 100).toStringAsFixed(1)}% | PD: ${(pdProb * 100).toStringAsFixed(1)}% | H: ${(healthyProb * 100).toStringAsFixed(1)}%";
+              "$prediction\nRAW: $rawArrayText\nAD: ${(adProb * 100).toStringAsFixed(1)}% | PD: ${(pdProb * 100).toStringAsFixed(1)}% | H: ${(healthyProb * 100).toStringAsFixed(1)}%";
 
-          // 4. Pass the dynamic file to the Heatmap XAI service
           File heatmap =
               await AudioXAIService.generateHeatmap(rawSpec, prediction);
 

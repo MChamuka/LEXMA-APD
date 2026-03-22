@@ -38,7 +38,8 @@ class AudioXAIService {
     }
 
     final tempDir = await getTemporaryDirectory();
-    final xaiFile = File('${tempDir.path}/audio_xai_heatmap.png');
+    final xaiFile = File(
+        '${tempDir.path}/audio_xai_${DateTime.now().millisecondsSinceEpoch}.png');
     await xaiFile.writeAsBytes(img.encodePng(heatmap));
     return xaiFile;
   }

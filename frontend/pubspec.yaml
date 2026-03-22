@@ -50,7 +50,7 @@ flutter:
     - assets/models/handpd_spiral_model_mobile_fixed.ptl
     - assets/models/finalNhats_fixed.ptl
     - assets/models/lifestyle.tflite
-    - assets/models/finalADPDVoice_fixed_probs.ptl
+    - assets/models/voice_pure.ptl
 
     - assets/labels.txt
     - assets/spiral_labels.txt
