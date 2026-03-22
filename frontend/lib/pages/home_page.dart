@@ -9,6 +9,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:pytorch_lite/pytorch_lite.dart';
 import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 import '../utils/pytorch_native.dart';
+import 'dart:math' as math;
+import 'package:opencv_dart/opencv_dart.dart' as cv;
 
 // --- MODELS & WIDGETS ---
 import '../models/modality_model.dart';
@@ -18,7 +20,7 @@ import '../widgets/lifestyle_form_sheet.dart';
 // --- UTILS (ADDED PREPROCESSORS HERE) ---
 import '../utils/face_processor.dart';
 import '../utils/clock_processor.dart';
-import '../utils/spiral_processor.dart'; // 🔥 ADDED YOUR NEW SPIRAL PROCESSOR
+import '../utils/spiral_processor.dart'; //
 
 // --- SERVICES ---
 import '../services/lifestyle_service.dart';
@@ -26,6 +28,7 @@ import '../services/audio_sevice.dart';
 import '../services/audio_xai_service.dart';
 import '../services/face_xai_service.dart';
 import '../services/clock_xai_service.dart';
+import '../services/spiral_xai_service.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -52,6 +55,7 @@ class _HomePageState extends State<HomePage> {
   List<MapEntry<String, double>> _topFactors = [];
   List<String> _audioBiomarkers = [];
   List<String> _faceBiomarkers = [];
+  List<String> _spiralBiomarkers = [];
 
   int _currentStep = 0;
   bool _showHelp = false;
@@ -110,7 +114,6 @@ class _HomePageState extends State<HomePage> {
               ? "After analysis, key facial biomarkers will appear here."
               : null,
         ),
-        // 🔥 CHANGED SPIRAL MODALITY TO BE AN IMAGE UPLOAD
         ModalityUI(
           index: 1,
           stepName: "Spiral",
@@ -196,7 +199,9 @@ class _HomePageState extends State<HomePage> {
           "assets/spiral_labels.txt",
           2);
       _audioModel = await loadSafePytorch(
-          "assets/models/finalADPDVoice.ptl", "assets/audio_labels.txt", 3);
+          "assets/models/finalADPDVoice_fixed_probs.ptl",
+          "assets/audio_labels.txt",
+          3);
       _dementiaModel = await loadSafePytorch(
           "assets/models/finalNhats_fixed.ptl", "assets/labels.txt", 2);
       _lifestyleInterpreter =
@@ -246,14 +251,13 @@ class _HomePageState extends State<HomePage> {
             _faceBiomarkers = FaceXAIService.getFaceBiomarkers(prediction);
           });
         } else if (index == 1) {
-          // 🔥 --- THE NEW SPIRAL IMAGE UPLOAD PIPELINE ---
+          // --- SPIRAL MODEL ---
           Uint8List processedSpiralBytes =
               await SpiralProcessor.process(originalFile);
 
           List<double> probs = await (model as ClassificationModel)
               .getImagePredictionList(processedSpiralBytes);
 
-          // CAPTURE RAW OUTPUT FOR UI
           String rawArrayText = probs.toString();
           double pdProb = 0.0;
 
@@ -267,21 +271,18 @@ class _HomePageState extends State<HomePage> {
 
           String diagText =
               pdProb > 0.5 ? "Parkinson's Detected" : "Healthy Pattern";
-
-          // 🔥 ADDED RAW AND PROBABILITY TO THE UI BADGE
           prediction =
               "$diagText\nRAW: $rawArrayText\nPROB: ${(pdProb * 100).toStringAsFixed(2)}%";
 
-          // Save the processed X-Ray so you can see OpenCV's handiwork
-          final tempDir = await getTemporaryDirectory();
-          File xrayFile = File(
-              '${tempDir.path}/xray_spiral_${DateTime.now().millisecondsSinceEpoch}.jpg');
-          await xrayFile.writeAsBytes(processedSpiralBytes);
+          File xaiImage =
+              await SpiralXAIService.generateHeatmap(originalFile, diagText);
 
           setState(() {
-            _images[1] = xrayFile;
+            _images[1] = xaiImage;
             _results[1] = prediction;
             _probs[1] = pdProb;
+            _spiralBiomarkers = SpiralXAIService.getBiomarkers(
+                diagText); //  Load the Biomarkers
           });
         } else if (index == 3) {
           // --- CDT MODEL ---
@@ -313,7 +314,8 @@ class _HomePageState extends State<HomePage> {
 
     if (!_isRecording) {
       final directory = await getTemporaryDirectory();
-      String path = '${directory.path}/temp_audio.wav';
+      String path =
+          '${directory.path}/temp_audio_${DateTime.now().millisecondsSinceEpoch}.wav';
       await _audioRecorder.start(const RecordConfig(encoder: AudioEncoder.wav),
           path: path);
       setState(() {
@@ -328,19 +330,56 @@ class _HomePageState extends State<HomePage> {
         setState(() => _results[2] = "Analyzing...");
         try {
           File rawSpec = await AudioService.generateV2Spectrogram(path);
-          Uint8List bytes = await rawSpec.readAsBytes();
 
-          List<double> vProbs =
-              await _audioModel!.getImagePredictionList(bytes);
-          double vScore = vProbs[1];
-          String prediction = vScore > 0.5 ? "Parkinson's Detected" : "Healthy";
+          cv.Mat colorMat = cv.imread(rawSpec.path);
+          cv.Mat grayMat = cv.cvtColor(colorMat, cv.COLOR_BGR2GRAY);
 
+          // 🔥 THE FIX
+          cv.Mat normMat = cv.Mat.empty();
+          cv.normalize(grayMat, normMat,
+              alpha: 0, beta: 255, normType: cv.NORM_MINMAX);
+
+          cv.Mat fixedMat = cv.cvtColor(normMat, cv.COLOR_GRAY2RGB);
+          Uint8List bytes = cv.imencode('.jpg', fixedMat).$2;
+
+          // Feed the fixed, black-and-white bytes to the model
+          List<double> probs = await _audioModel!.getImagePredictionList(bytes);
+
+          // ... rest of your math ...
+
+          // ... rest of your code ...
+
+          double adProb = 0.0;
+          double pdProb = 0.0;
+          double healthyProb = 0.0;
+
+          if (probs.isNotEmpty && probs.length == 3) {
+            adProb = probs[0]; // Alzheimer's
+            pdProb = probs[1]; // Parkinson's
+            healthyProb = probs[2]; // Healthy
+          }
+
+          // Total Anomaly Score
+          double overallAnomalyScore = adProb + pdProb;
+
+          String prediction = "Healthy Pattern";
+          if (adProb > pdProb && adProb > healthyProb) {
+            prediction = "Alzheimer's Detected";
+          } else if (pdProb > adProb && pdProb > healthyProb) {
+            prediction = "Parkinson's Detected";
+          }
+
+          String uiText =
+              "$prediction\nAD: ${(adProb * 100).toStringAsFixed(1)}% | PD: ${(pdProb * 100).toStringAsFixed(1)}% | H: ${(healthyProb * 100).toStringAsFixed(1)}%";
+
+          // Note: We still pass the colorful rawSpec to the Heatmap service because it looks cooler for the UI
           File heatmap =
               await AudioXAIService.generateHeatmap(rawSpec, prediction);
+
           setState(() {
             _images[2] = heatmap;
-            _results[2] = prediction;
-            _probs[2] = vScore;
+            _results[2] = uiText;
+            _probs[2] = overallAnomalyScore;
             _audioBiomarkers = AudioXAIService.getBiomarkers(prediction);
           });
         } catch (e) {
@@ -700,7 +739,6 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
             const SizedBox(height: 12),
-            // 🔥 REMOVED THE COMPLEX 'SPIRAL' PREVIEW BOX ROUTING
             if (m.type == 'image' || m.type == 'audio')
               PreviewBox(
                   child: _images[idx] != null
@@ -717,7 +755,6 @@ class _HomePageState extends State<HomePage> {
                   ? null
                   : () async {
                       _setStep(idx);
-                      // 🔥 REMOVED THE OLD NAVIGATOR.PUSH CODE
                       if (m.type == 'audio') {
                         _handleAudioRecording();
                       } else if (m.type == 'lifestyle') {
@@ -738,18 +775,24 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildExplanationPanel(ModalityUI m) {
     List<Widget> chips = [];
-    if (m.index == 0)
+    if (m.index == 0) {
       chips = _faceBiomarkers
           .map((b) => SmallChip(text: b, icon: Icons.visibility))
           .toList();
-    else if (m.index == 2)
+    } else if (m.index == 1) {
+      // 🔥 SPIRAL BIOMARKERS ADDED HERE
+      chips = _spiralBiomarkers
+          .map((b) => SmallChip(text: b, icon: Icons.gesture))
+          .toList();
+    } else if (m.index == 2) {
       chips = _audioBiomarkers
           .map((b) => SmallChip(text: b, icon: Icons.multitrack_audio))
           .toList();
-    else if (m.index == 4)
+    } else if (m.index == 4) {
       chips = _topFactors
           .map((e) => SmallChip(text: e.key, icon: Icons.analytics))
           .toList();
+    }
 
     return Container(
       padding: const EdgeInsets.all(8),
@@ -758,10 +801,16 @@ class _HomePageState extends State<HomePage> {
         children: [
           Text(m.explainTitle,
               style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(
+              height: 6), // Added a tiny bit of spacing for cleaner UI
           if (chips.isEmpty)
             Text(m.explainBody ?? "Run step to see explanations.")
           else
-            Wrap(spacing: 8, children: chips),
+            Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children:
+                    chips), // runSpacing prevents chips from overlapping vertically
         ],
       ),
     );
