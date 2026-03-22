@@ -7,6 +7,7 @@ import 'package:pytorch_lite/pytorch_lite.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
 import 'package:flutter/services.dart' show rootBundle;
+import 'dart:math' as math;
 
 class SpiralTestPage extends StatefulWidget {
   final ClassificationModel model;
@@ -94,36 +95,52 @@ class _SpiralTestPageState extends State<SpiralTestPage> {
       } else {
         finalImage = img.copyResize(gray, width: 224, height: 224);
       }
+
       Uint8List inputBytes = Uint8List.fromList(img.encodeJpg(finalImage));
+
       // 6. Run Prediction
       List<double> probs =
           await widget.model.getImagePredictionList(inputBytes);
 
-      // The model outputs the probability of Parkinson's
-      double pdProb = probs[0];
+      String rawArrayText = probs.toString();
+      double pdProb = 0.0;
 
-      // Create a clean diagnostic string for the Home Page UI badge
-      String prediction =
+      // 🔥 THE ULTIMATE MATH FIX 🔥
+      if (probs.isNotEmpty) {
+        // We explicitly ignore the fake zero PyTorch Lite added.
+        // We only grab your true raw value at index 0.
+        double rawValue = probs[0];
+
+        // Apply Sigmoid to convert the raw logit (e.g., 5.0764) to a probability (0.99)
+        pdProb = 1.0 / (1.0 + math.exp(-rawValue));
+      }
+
+      String diagText =
           pdProb > 0.5 ? "Parkinson's Detected" : "Healthy Pattern";
+      String prediction =
+          "$diagText\nRAW: $rawArrayText\nPROB: ${(pdProb * 100).toStringAsFixed(2)}%";
 
-      // 7. DIAGNOSTIC MODE: Save the AI's "X-Ray" image and send it to the UI
+      // 7. DIAGNOSTIC MODE: Save the AI's "X-Ray" image
       final tempDir = await getTemporaryDirectory();
       File xrayFile = File(
           '${tempDir.path}/xray_spiral_${DateTime.now().millisecondsSinceEpoch}.jpg');
       await xrayFile.writeAsBytes(inputBytes);
 
       if (mounted) {
+        setState(() => _isAnalyzing = false);
         Navigator.pop(context, {
           'image': xrayFile,
           'prediction': prediction,
-          'probability': pdProb, // 🔥 THIS IS THE CRITICAL LINE FOR FUSION!
+          'probability': pdProb, // Finally sending the correct probability!
         });
       }
     } catch (e) {
-      setState(() {
-        _result = "Error: $e";
-        _isAnalyzing = false;
-      });
+      if (mounted) {
+        setState(() {
+          _result = "Error: $e";
+          _isAnalyzing = false;
+        });
+      }
     }
   }
 
@@ -184,13 +201,14 @@ class _SpiralTestPageState extends State<SpiralTestPage> {
 class SpiralPainter extends CustomPainter {
   final List<Offset?> points;
   SpiralPainter(this.points);
+
   @override
   void paint(Canvas canvas, Size size) {
     Paint p = Paint()
       ..color = Colors.blue.shade900
-      // FIX: Increased from 4 to 12 so the AI can actually see the lines after resizing!
       ..strokeWidth = 4.0
       ..strokeCap = StrokeCap.round;
+
     for (int i = 0; i < points.length - 1; i++) {
       if (points[i] != null && points[i + 1] != null) {
         canvas.drawLine(points[i]!, points[i + 1]!, p);

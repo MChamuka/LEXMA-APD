@@ -9,8 +9,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:pytorch_lite/pytorch_lite.dart';
 import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 import '../utils/pytorch_native.dart';
-// --- PAGES ---
-import 'spiral_test_page.dart';
 
 // --- MODELS & WIDGETS ---
 import '../models/modality_model.dart';
@@ -20,6 +18,7 @@ import '../widgets/lifestyle_form_sheet.dart';
 // --- UTILS (ADDED PREPROCESSORS HERE) ---
 import '../utils/face_processor.dart';
 import '../utils/clock_processor.dart';
+import '../utils/spiral_processor.dart'; // 🔥 ADDED YOUR NEW SPIRAL PROCESSOR
 
 // --- SERVICES ---
 import '../services/lifestyle_service.dart';
@@ -48,8 +47,6 @@ class _HomePageState extends State<HomePage> {
 
   final List<File?> _images = List.filled(5, null);
   final List<String> _results = List.filled(5, "Not Analyzed");
-
-  // 🔥 NEW: Array to store raw probabilities for Decision-Level Fusion
   final List<double?> _probs = List.filled(5, null);
 
   List<MapEntry<String, double>> _topFactors = [];
@@ -113,17 +110,19 @@ class _HomePageState extends State<HomePage> {
               ? "After analysis, key facial biomarkers will appear here."
               : null,
         ),
+        // 🔥 CHANGED SPIRAL MODALITY TO BE AN IMAGE UPLOAD
         ModalityUI(
           index: 1,
           stepName: "Spiral",
           title: "Spiral Test",
-          subtitle: "Draw the spiral with guided steps",
-          icon: Icons.gesture,
-          primaryButton: "Start Spiral Test",
-          type: 'spiral',
+          subtitle: "Upload a photo of your drawn spiral",
+          icon: Icons.draw,
+          primaryButton: "Upload Spiral Photo",
+          type: 'image', // Now treated as standard image upload
           model: _spiralModel,
           explainTitle: "Spiral Explanation",
-          explainBody: "This test helps detect motor-control patterns.",
+          explainBody:
+              "This test analyzes motor-control patterns from your pen strokes.",
         ),
         ModalityUI(
           index: 2,
@@ -193,7 +192,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _loadAllModels() async {
     try {
       _spiralModel = await loadSafePytorch(
-          "assets/models/spiral_model_mobile.ptl",
+          "assets/models/handpd_spiral_model_mobile_fixed.ptl",
           "assets/spiral_labels.txt",
           2);
       _audioModel = await loadSafePytorch(
@@ -223,6 +222,7 @@ class _HomePageState extends State<HomePage> {
         String prediction = "Error";
 
         if (index == 0) {
+          // --- FACE MODEL ---
           final faceData = await FaceImageProcessor.process(originalFile);
           if (faceData == null) {
             setState(() => _results[0] = "Error: No face detected");
@@ -242,10 +242,49 @@ class _HomePageState extends State<HomePage> {
           setState(() {
             _images[0] = xaiImage;
             _results[0] = prediction;
-            _probs[0] = score; // 🔥 Save raw probability for fusion
+            _probs[0] = score;
             _faceBiomarkers = FaceXAIService.getFaceBiomarkers(prediction);
           });
+        } else if (index == 1) {
+          // 🔥 --- THE NEW SPIRAL IMAGE UPLOAD PIPELINE ---
+          Uint8List processedSpiralBytes =
+              await SpiralProcessor.process(originalFile);
+
+          List<double> probs = await (model as ClassificationModel)
+              .getImagePredictionList(processedSpiralBytes);
+
+          // CAPTURE RAW OUTPUT FOR UI
+          String rawArrayText = probs.toString();
+          double pdProb = 0.0;
+
+          if (probs.isNotEmpty) {
+            if (probs.length >= 2) {
+              pdProb = probs[1];
+            } else {
+              pdProb = probs[0];
+            }
+          }
+
+          String diagText =
+              pdProb > 0.5 ? "Parkinson's Detected" : "Healthy Pattern";
+
+          // 🔥 ADDED RAW AND PROBABILITY TO THE UI BADGE
+          prediction =
+              "$diagText\nRAW: $rawArrayText\nPROB: ${(pdProb * 100).toStringAsFixed(2)}%";
+
+          // Save the processed X-Ray so you can see OpenCV's handiwork
+          final tempDir = await getTemporaryDirectory();
+          File xrayFile = File(
+              '${tempDir.path}/xray_spiral_${DateTime.now().millisecondsSinceEpoch}.jpg');
+          await xrayFile.writeAsBytes(processedSpiralBytes);
+
+          setState(() {
+            _images[1] = xrayFile;
+            _results[1] = prediction;
+            _probs[1] = pdProb;
+          });
         } else if (index == 3) {
+          // --- CDT MODEL ---
           Uint8List processedClockBytes =
               await ClockProcessor.process(originalFile);
           List<double> probs = await (model as ClassificationModel)
@@ -259,8 +298,7 @@ class _HomePageState extends State<HomePage> {
           setState(() {
             _images[3] = xaiImage;
             _results[3] = prediction;
-            _probs[3] = adProb; // 🔥 Save raw probability for fusion
-            _faceBiomarkers = ClockXAIService.getClockBiomarkers(prediction);
+            _probs[3] = adProb;
           });
         }
       } catch (e) {
@@ -292,10 +330,9 @@ class _HomePageState extends State<HomePage> {
           File rawSpec = await AudioService.generateV2Spectrogram(path);
           Uint8List bytes = await rawSpec.readAsBytes();
 
-          // 🔥 We changed this to PredictionList to get raw probabilities!
           List<double> vProbs =
               await _audioModel!.getImagePredictionList(bytes);
-          double vScore = vProbs[1]; // Assuming index 1 is pathological/PD
+          double vScore = vProbs[1];
           String prediction = vScore > 0.5 ? "Parkinson's Detected" : "Healthy";
 
           File heatmap =
@@ -303,7 +340,7 @@ class _HomePageState extends State<HomePage> {
           setState(() {
             _images[2] = heatmap;
             _results[2] = prediction;
-            _probs[2] = vScore; // 🔥 Save raw probability for fusion
+            _probs[2] = vScore;
             _audioBiomarkers = AudioXAIService.getBiomarkers(prediction);
           });
         } catch (e) {
@@ -370,7 +407,7 @@ class _HomePageState extends State<HomePage> {
 
       setState(() {
         _results[4] = "$diag (${(maxVal * 100).toStringAsFixed(1)}%)";
-        _probs[4] = maxVal; // 🔥 Save raw probability for fusion
+        _probs[4] = maxVal;
       });
     } catch (e) {
       setState(() => _results[4] = "Error");
@@ -427,15 +464,10 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ==========================================
-  // 🔥 THE NEW MULTIMODAL FUSION DASHBOARD 🔥
-  // ==========================================
   Widget _buildFusionDashboard() {
-    // 1. Calculate the dynamic fusion score
     double totalWeight = 0;
     double fusedProb = 0;
 
-    // We average any modality that has been completed
     for (int i = 0; i < 5; i++) {
       if (_probs[i] != null) {
         fusedProb += _probs[i]!;
@@ -443,7 +475,6 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
-    // If no tests are done, show standard header
     if (totalWeight == 0) {
       return Container(
         padding: const EdgeInsets.all(14),
@@ -466,7 +497,6 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    // Perform Final Calculation
     fusedProb = fusedProb / totalWeight;
     bool isDetected = fusedProb > 0.5;
 
@@ -501,17 +531,12 @@ class _HomePageState extends State<HomePage> {
             ],
           ),
           const SizedBox(height: 12),
-
-          // List out the active modalities
           if (_probs[0] != null) _buildFusionRow("Face Model", _probs[0]!),
           if (_probs[1] != null) _buildFusionRow("Spiral Model", _probs[1]!),
           if (_probs[2] != null) _buildFusionRow("Voice Model", _probs[2]!),
           if (_probs[3] != null) _buildFusionRow("CDT Model", _probs[3]!),
           if (_probs[4] != null) _buildFusionRow("Lifestyle Data", _probs[4]!),
-
           const Divider(height: 24),
-
-          // Final Output
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -565,9 +590,7 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
-  // ==========================================
 
-  // --- UI BUILDING ---
   @override
   Widget build(BuildContext context) {
     return Theme(
@@ -596,7 +619,7 @@ class _HomePageState extends State<HomePage> {
                       child: ListView(
                         padding: const EdgeInsets.all(16),
                         children: [
-                          _buildFusionDashboard(), // 🔥 Replaced the old Overview Card!
+                          _buildFusionDashboard(),
                           const SizedBox(height: 12),
                           ..._mods().map((m) => _buildStepCard(m)),
                         ],
@@ -677,19 +700,13 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
             const SizedBox(height: 12),
+            // 🔥 REMOVED THE COMPLEX 'SPIRAL' PREVIEW BOX ROUTING
             if (m.type == 'image' || m.type == 'audio')
               PreviewBox(
                   child: _images[idx] != null
                       ? Image.file(_images[idx]!, fit: BoxFit.contain)
                       : Center(
-                          child: Icon(m.icon, size: 42, color: Colors.grey)))
-            else if (m.type == 'spiral')
-              PreviewBox(
-                  child: _images[idx] != null
-                      ? Image.file(_images[idx]!, fit: BoxFit.contain)
-                      : const Center(
-                          child: Icon(Icons.gesture,
-                              size: 50, color: Colors.grey))),
+                          child: Icon(m.icon, size: 42, color: Colors.grey))),
             const SizedBox(height: 10),
             Text("Result: $result",
                 style: TextStyle(color: color, fontWeight: FontWeight.bold)),
@@ -700,25 +717,13 @@ class _HomePageState extends State<HomePage> {
                   ? null
                   : () async {
                       _setStep(idx);
-                      if (m.type == 'spiral') {
-                        final resultData = await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (c) =>
-                                    SpiralTestPage(model: _spiralModel!)));
-                        if (resultData != null && resultData is Map) {
-                          setState(() {
-                            _images[idx] = resultData['image'];
-                            _results[idx] = resultData['prediction'];
-                            _probs[idx] = resultData[
-                                'probability']; // 🔥 Captures spiral probability!
-                          });
-                        }
-                      } else if (m.type == 'audio') {
+                      // 🔥 REMOVED THE OLD NAVIGATOR.PUSH CODE
+                      if (m.type == 'audio') {
                         _handleAudioRecording();
                       } else if (m.type == 'lifestyle') {
                         _openLifestyleForm();
                       } else {
+                        // THIS NOW HANDLES FACE, SPIRAL, AND CDT!
                         _pickImage(idx, m.model);
                       }
                     },

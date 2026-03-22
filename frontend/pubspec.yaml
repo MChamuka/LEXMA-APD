@@ -47,7 +47,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/models/final_face_model_mobile.ptl
-    - assets/models/spiral_model_mobile.ptl
+    - assets/models/handpd_spiral_model_mobile_fixed.ptl
     - assets/models/finalNhats_fixed.ptl
     - assets/models/lifestyle.tflite
     - assets/models/finalADPDVoice.ptl

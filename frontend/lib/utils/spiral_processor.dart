@@ -9,8 +9,12 @@ class SpiralProcessor {
 
     // 1. Grayscale & Threshold
     cv.Mat gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY);
+
+    // A tiny blur helps Otsu ignore paper texture and camera noise
+    cv.Mat blurred = cv.gaussianBlur(gray, (3, 3), 0);
+
     var threshResult =
-        cv.threshold(gray, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+        cv.threshold(blurred, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
     cv.Mat thresh = threshResult.$2;
 
     // 2. Find Contours
@@ -39,14 +43,15 @@ class SpiralProcessor {
 
     cv.Mat cropped = thresh.region(cv.Rect(x, y, w, h));
 
-    // 5. Resize to 224x224 (Fixed the Size tuple issue here!)
+    // 5. Resize to 224x224
     cv.Mat resized =
         cv.resize(cropped, (224, 224), interpolation: cv.INTER_AREA);
 
     // 6. Back to 3 channels
     cv.Mat finalImg = cv.cvtColor(resized, cv.COLOR_GRAY2RGB);
 
-    var encoded = cv.imencode('.png', finalImg);
+    // FIX: Encode to JPG instead of PNG to prevent Android transparency bugs in PyTorch
+    var encoded = cv.imencode('.jpg', finalImg);
     return encoded.$2;
   }
 }
