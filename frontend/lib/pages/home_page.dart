@@ -11,6 +11,7 @@ import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 import '../utils/pytorch_native.dart';
 import 'dart:math' as math;
 import 'package:opencv_dart/opencv_dart.dart' as cv;
+import '../utils/audio_processor.dart';
 
 // --- MODELS & WIDGETS ---
 import '../models/modality_model.dart';
@@ -314,6 +315,7 @@ class _HomePageState extends State<HomePage> {
 
     if (!_isRecording) {
       final directory = await getTemporaryDirectory();
+      // 🔥 Timestamp added here to prevent Flutter from caching the audio file
       String path =
           '${directory.path}/temp_audio_${DateTime.now().millisecondsSinceEpoch}.wav';
       await _audioRecorder.start(const RecordConfig(encoder: AudioEncoder.wav),
@@ -329,25 +331,18 @@ class _HomePageState extends State<HomePage> {
       if (path != null && _audioModel != null) {
         setState(() => _results[2] = "Analyzing...");
         try {
-          File rawSpec = await AudioService.generateV2Spectrogram(path);
+          // 1. Use the new AudioProcessor! It does the Librosa math and outputs perfect bytes.
+          Uint8List processedBytes = await AudioProcessor.process(File(path));
 
-          cv.Mat colorMat = cv.imread(rawSpec.path);
-          cv.Mat grayMat = cv.cvtColor(colorMat, cv.COLOR_BGR2GRAY);
+          // 2. Save those bytes to a dynamic file to fix the Flutter Image Caching bug
+          final tempDir = await getTemporaryDirectory();
+          File rawSpec = File(
+              '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.jpg');
+          await rawSpec.writeAsBytes(processedBytes);
 
-          // 🔥 THE FIX
-          cv.Mat normMat = cv.Mat.empty();
-          cv.normalize(grayMat, normMat,
-              alpha: 0, beta: 255, normType: cv.NORM_MINMAX);
-
-          cv.Mat fixedMat = cv.cvtColor(normMat, cv.COLOR_GRAY2RGB);
-          Uint8List bytes = cv.imencode('.jpg', fixedMat).$2;
-
-          // Feed the fixed, black-and-white bytes to the model
-          List<double> probs = await _audioModel!.getImagePredictionList(bytes);
-
-          // ... rest of your math ...
-
-          // ... rest of your code ...
+          // 3. Feed the perfect bytes straight to the model
+          List<double> probs =
+              await _audioModel!.getImagePredictionList(processedBytes);
 
           double adProb = 0.0;
           double pdProb = 0.0;
@@ -359,7 +354,7 @@ class _HomePageState extends State<HomePage> {
             healthyProb = probs[2]; // Healthy
           }
 
-          // Total Anomaly Score
+          // Total Anomaly Score for the Multimodal Fusion Dashboard
           double overallAnomalyScore = adProb + pdProb;
 
           String prediction = "Healthy Pattern";
@@ -372,7 +367,7 @@ class _HomePageState extends State<HomePage> {
           String uiText =
               "$prediction\nAD: ${(adProb * 100).toStringAsFixed(1)}% | PD: ${(pdProb * 100).toStringAsFixed(1)}% | H: ${(healthyProb * 100).toStringAsFixed(1)}%";
 
-          // Note: We still pass the colorful rawSpec to the Heatmap service because it looks cooler for the UI
+          // 4. Pass the dynamic file to the Heatmap XAI service
           File heatmap =
               await AudioXAIService.generateHeatmap(rawSpec, prediction);
 
