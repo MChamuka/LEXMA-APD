@@ -236,18 +236,35 @@ class _HomePageState extends State<HomePage> {
           List<double> features = faceData['features'];
           Map<String, List<double>> landmarks = faceData['landmarks'];
 
+          // 1. Get the pure array from the new PyTorch model
+          // It will now return exactly [HealthyProb, PDProb]
           List<double> probs = await PyTorchNative.predictFace(features);
-          double score = probs[0];
-          prediction = score > 0.5 ? "Parkinson's" : "Healthy";
+          String rawArrayText = probs.toString();
+
+          double pdProb = 0.0;
+
+          // 2. Read the real probability (No dummy math!)
+          if (probs.isNotEmpty && probs.length >= 2) {
+            pdProb = probs[1]; // Index 1 is the PD probability
+          } else if (probs.isNotEmpty) {
+            pdProb = probs[0]; // Fallback just in case
+          }
+
+          String diagText =
+              pdProb > 0.5 ? "Parkinson's Detected" : "Healthy Pattern";
+
+          // 3. Inject the REAL percentages into the UI
+          prediction =
+              "$diagText\nRAW: $rawArrayText\nPROB: ${(pdProb * 100).toStringAsFixed(1)}%";
 
           File xaiImage = await FaceXAIService.generateHeatmap(
-              originalFile, prediction, landmarks);
+              originalFile, diagText, landmarks);
 
           setState(() {
             _images[0] = xaiImage;
             _results[0] = prediction;
-            _probs[0] = score;
-            _faceBiomarkers = FaceXAIService.getFaceBiomarkers(prediction);
+            _probs[0] = pdProb;
+            _faceBiomarkers = FaceXAIService.getFaceBiomarkers(diagText);
           });
         } else if (index == 1) {
           // --- SPIRAL MODEL ---

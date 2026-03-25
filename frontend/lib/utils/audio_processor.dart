@@ -66,7 +66,7 @@ class AudioProcessor {
         double db = 20 * (log(max(mag, 1e-9) / trueMaxMag) / ln10);
         dbCol.add(db);
 
-        // 🔥 THE FIX: Track the absolute limits of this specific recording
+        //Track the absolute limits of this specific recording
         if (db < minDb) minDb = db;
         if (db > maxDb) maxDb = db;
       }
