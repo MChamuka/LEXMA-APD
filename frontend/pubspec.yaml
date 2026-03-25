@@ -46,7 +46,7 @@ flutter_launcher_icons:
 flutter:
   uses-material-design: true
   assets:
-    - assets/models/final_face_model_mobile.ptl
+    - assets/models/face_pure_mobile.ptl
     - assets/models/handpd_spiral_model_mobile_fixed.ptl
     - assets/models/finalNhats_fixed.ptl
     - assets/models/lifestyle.tflite

@@ -1,12 +1,13 @@
 import 'dart:io';
 import 'dart:math';
 import 'package:face_detection_tflite/face_detection_tflite.dart';
+import 'package:image/image.dart'
+    as img; // 🔥 THE FIX: Needed to get image dimensions
 
 class FaceImageProcessor {
   static final FaceDetector _detector = FaceDetector();
   static bool _isInitialized = false;
 
-  // CHANGED: Now returns a Map containing both the features AND the exact landmarks
   static Future<Map<String, dynamic>?> process(File file) async {
     if (!_isInitialized) {
       await _detector.initialize(model: FaceDetectionModel.frontCamera);
@@ -15,11 +16,23 @@ class FaceImageProcessor {
 
     try {
       final imageBytes = await file.readAsBytes();
+
+      // 🔥 THE FIX: Get the exact image dimensions so we can normalize the coordinates!
+      final decodedImage = img.decodeImage(imageBytes);
+      if (decodedImage == null) return null;
+      double imgW = decodedImage.width.toDouble();
+      double imgH = decodedImage.height.toDouble();
+
       final faces = await _detector.detectFaces(imageBytes,
           mode: FaceDetectionMode.standard);
 
       if (faces.isEmpty || faces.first.mesh == null) return null;
-      final points = faces.first.mesh!.points;
+
+      // Keep the raw pixel points for the XAI Heatmap
+      final rawPoints = faces.first.mesh!.points;
+
+      // 🔥 THE FIX: Normalize every point to 0.0 - 1.0 space exactly like Python Mediapipe!
+      Point nPt(Point p) => Point(p.x / imgW, p.y / imgH);
 
       // --- Math Helpers ---
       double dist(Point a, Point b) =>
@@ -27,22 +40,22 @@ class FaceImageProcessor {
       double angle(Point a, Point b) => atan2(b.y - a.y, b.x - a.x);
       double safeDiv(double n, double d) => n / (d.abs() > 1e-6 ? d : 1e-6);
 
-      // --- Extract Specific Landmarks ---
-      var lEyeOuter = points[33],
-          lEyeInner = points[133],
-          lEyeTop = points[159],
-          lEyeBot = points[145];
-      var rEyeOuter = points[263],
-          rEyeInner = points[362],
-          rEyeTop = points[386],
-          rEyeBot = points[374];
-      var mLeft = points[61],
-          mRight = points[291],
-          mTop = points[13],
-          mBot = points[14];
-      var lBrow = points[70], rBrow = points[300];
+      // --- Extract Normalized Landmarks ---
+      var lEyeOuter = nPt(rawPoints[33]),
+          lEyeInner = nPt(rawPoints[133]),
+          lEyeTop = nPt(rawPoints[159]),
+          lEyeBot = nPt(rawPoints[145]);
+      var rEyeOuter = nPt(rawPoints[263]),
+          rEyeInner = nPt(rawPoints[362]),
+          rEyeTop = nPt(rawPoints[386]),
+          rEyeBot = nPt(rawPoints[374]);
+      var mLeft = nPt(rawPoints[61]),
+          mRight = nPt(rawPoints[291]),
+          mTop = nPt(rawPoints[13]),
+          mBot = nPt(rawPoints[14]);
+      var lBrow = nPt(rawPoints[70]), rBrow = nPt(rawPoints[300]);
 
-      // --- Feature Calculations ---
+      // --- Feature Calculations (Now safely in 0.0 - 1.0 scale) ---
       double lEyeW = dist(lEyeOuter, lEyeInner);
       double rEyeW = dist(rEyeOuter, rEyeInner);
       double lEyeH = dist(lEyeTop, lEyeBot);
@@ -92,20 +105,22 @@ class FaceImageProcessor {
       List<double> features =
           rawFeatures.map((f) => f.isNaN || f.isInfinite ? 0.0 : f).toList();
 
-      // --- THE NEW FIX: Package the exact coordinates! ---
+      // --- Package the exact PIXEL coordinates for the XAI Heatmap ---
       Map<String, List<double>> landmarks = {
         'leftEye': [
-          (lEyeOuter.x + lEyeInner.x) / 2,
-          (lEyeTop.y + lEyeBot.y) / 2
+          (rawPoints[33].x + rawPoints[133].x) / 2,
+          (rawPoints[159].y + rawPoints[145].y) / 2
         ],
         'rightEye': [
-          (rEyeOuter.x + rEyeInner.x) / 2,
-          (rEyeTop.y + rEyeBot.y) / 2
+          (rawPoints[263].x + rawPoints[362].x) / 2,
+          (rawPoints[386].y + rawPoints[374].y) / 2
         ],
-        'mouth': [(mLeft.x + mRight.x) / 2, (mTop.y + mBot.y) / 2],
+        'mouth': [
+          (rawPoints[61].x + rawPoints[291].x) / 2,
+          (rawPoints[13].y + rawPoints[14].y) / 2
+        ],
       };
 
-      // Return both!
       return {'features': features, 'landmarks': landmarks};
     } catch (e) {
       print("Face Processing Error: $e");

@@ -6,9 +6,9 @@ class PyTorchNative {
   static const platform = MethodChannel('com.lexma.apd/pytorch');
   static Future<String> _getAbsolutePath() async {
     final byteData =
-        await rootBundle.load('assets/models/final_face_model_mobile.ptl');
-    final file = File(
-        '${(await getTemporaryDirectory()).path}/final_face_model_mobile.ptl');
+        await rootBundle.load('assets/models/face_pure_mobile.ptl');
+    final file =
+        File('${(await getTemporaryDirectory()).path}/face_pure_mobile.ptl');
     await file.writeAsBytes(byteData.buffer
         .asUint8List(byteData.offsetInBytes, byteData.lengthInBytes));
     return file.path;
