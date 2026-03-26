@@ -236,26 +236,36 @@ class _HomePageState extends State<HomePage> {
           List<double> features = faceData['features'];
           Map<String, List<double>> landmarks = faceData['landmarks'];
 
-          // 1. Get the pure array from the new PyTorch model
-          // It will now return exactly [HealthyProb, PDProb]
+          // 1. Get the pure array from the new PyTorch model [HealthyProb, PDProb]
           List<double> probs = await PyTorchNative.predictFace(features);
           String rawArrayText = probs.toString();
 
+          double healthyProb = 0.0;
           double pdProb = 0.0;
+          double displayProb = 0.0;
 
-          // 2. Read the real probability (No dummy math!)
+          // 2. Read BOTH probabilities (No dummy math!)
           if (probs.isNotEmpty && probs.length >= 2) {
-            pdProb = probs[1]; // Index 1 is the PD probability
+            healthyProb = probs[0];
+            pdProb = probs[1];
           } else if (probs.isNotEmpty) {
             pdProb = probs[0]; // Fallback just in case
+            healthyProb = 1.0 - pdProb;
           }
 
-          String diagText =
-              pdProb > 0.5 ? "Parkinson's Detected" : "Healthy Pattern";
+          // 3. Determine the winning class and grab its confidence score!
+          String diagText = "Healthy Pattern";
+          if (pdProb > healthyProb) {
+            diagText = "Parkinson's Detected";
+            displayProb = pdProb; // Show PD confidence
+          } else {
+            diagText = "Healthy Pattern";
+            displayProb = healthyProb; // Show Healthy confidence
+          }
 
-          // 3. Inject the REAL percentages into the UI
+          // 4. Inject the WINNING percentage into the UI
           prediction =
-              "$diagText\nRAW: $rawArrayText\nPROB: ${(pdProb * 100).toStringAsFixed(1)}%";
+              "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
 
           File xaiImage = await FaceXAIService.generateHeatmap(
               originalFile, diagText, landmarks);
@@ -263,7 +273,10 @@ class _HomePageState extends State<HomePage> {
           setState(() {
             _images[0] = xaiImage;
             _results[0] = prediction;
+
+            // 🔥 CRITICAL: Pass the PD probability to the Fusion Engine!
             _probs[0] = pdProb;
+
             _faceBiomarkers = FaceXAIService.getFaceBiomarkers(diagText);
           });
         } else if (index == 1) {
@@ -363,27 +376,22 @@ class _HomePageState extends State<HomePage> {
           double pdProb = 0.0;
           double healthyProb = 0.0;
 
-          // 🔥 THE FIX: Temperature Scaling + Softmax
+          // 🔥 Temperature Scaling + Softmax
           if (probs.isNotEmpty && probs.length == 3) {
-            // Cool down the massive logits so the math doesn't explode
-            // (You can adjust this number. Higher = smoother/closer percentages)
             double temperature = 250.0;
 
             double logit0 = probs[0] / temperature;
             double logit1 = probs[1] / temperature;
             double logit2 = probs[2] / temperature;
 
-            // Find the highest scaled score
             double maxVal = math.max(logit0, math.max(logit1, logit2));
 
-            // Calculate exponentials
             double exp0 = math.exp(logit0 - maxVal);
             double exp1 = math.exp(logit1 - maxVal);
             double exp2 = math.exp(logit2 - maxVal);
 
             double sumExp = exp0 + exp1 + exp2;
 
-            // Convert to perfect, realistic 0.0 - 1.0 percentages!
             adProb = exp0 / sumExp; // Index 0: Alzheimer's
             pdProb = exp1 / sumExp; // Index 1: Parkinson's
             healthyProb = exp2 / sumExp; // Index 2: Healthy
@@ -533,11 +541,11 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildFusionDashboard() {
     double totalWeight = 0;
-    double fusedProb = 0;
+    double fusedAnomalyProb = 0;
 
     for (int i = 0; i < 5; i++) {
       if (_probs[i] != null) {
-        fusedProb += _probs[i]!;
+        fusedAnomalyProb += _probs[i]!;
         totalWeight++;
       }
     }
@@ -564,8 +572,12 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    fusedProb = fusedProb / totalWeight;
-    bool isDetected = fusedProb > 0.5;
+    fusedAnomalyProb = fusedAnomalyProb / totalWeight;
+    bool isDetected = fusedAnomalyProb > 0.5;
+
+    // 🔥 THE FIX: Calculate the WINNING confidence for the final grand total!
+    double displayFusionProb =
+        isDetected ? fusedAnomalyProb : (1.0 - fusedAnomalyProb);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -610,9 +622,9 @@ class _HomePageState extends State<HomePage> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text("Final Multimodal Score",
+                  const Text("Final Multimodal Confidence",
                       style: TextStyle(fontSize: 12, color: Colors.black54)),
-                  Text("${(fusedProb * 100).toStringAsFixed(1)}%",
+                  Text("${(displayFusionProb * 100).toStringAsFixed(1)}%",
                       style: TextStyle(
                           fontSize: 28,
                           fontWeight: FontWeight.w900,
@@ -639,7 +651,13 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildFusionRow(String label, double prob) {
+  Widget _buildFusionRow(String label, double anomalyProb) {
+    // 🔥 THE FIX: Make each row explicitly state its winning percentage and class!
+    bool isAnomaly = anomalyProb > 0.5;
+    double displayProb = isAnomaly ? anomalyProb : (1.0 - anomalyProb);
+    String status = isAnomaly ? "Anomaly" : "Healthy";
+    Color statusColor = isAnomaly ? Colors.red : Colors.green;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
@@ -650,9 +668,11 @@ class _HomePageState extends State<HomePage> {
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                   color: Colors.black87)),
-          Text("${(prob * 100).toStringAsFixed(1)}%",
-              style:
-                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+          Text("${(displayProb * 100).toStringAsFixed(1)}% $status",
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: statusColor)),
         ],
       ),
     );
@@ -829,16 +849,11 @@ class _HomePageState extends State<HomePage> {
         children: [
           Text(m.explainTitle,
               style: const TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(
-              height: 6), // Added a tiny bit of spacing for cleaner UI
+          const SizedBox(height: 6),
           if (chips.isEmpty)
             Text(m.explainBody ?? "Run step to see explanations.")
           else
-            Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children:
-                    chips), // runSpacing prevents chips from overlapping vertically
+            Wrap(spacing: 8, runSpacing: 8, children: chips),
         ],
       ),
     );

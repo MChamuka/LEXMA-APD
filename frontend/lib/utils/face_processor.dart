@@ -1,8 +1,7 @@
 import 'dart:io';
 import 'dart:math';
 import 'package:face_detection_tflite/face_detection_tflite.dart';
-import 'package:image/image.dart'
-    as img; // 🔥 THE FIX: Needed to get image dimensions
+import 'package:image/image.dart' as img; //  Needed to get image dimensions
 
 class FaceImageProcessor {
   static final FaceDetector _detector = FaceDetector();
