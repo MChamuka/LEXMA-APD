@@ -17,7 +17,7 @@ import '../models/modality_model.dart';
 import '../widgets/ui_components.dart';
 import '../widgets/lifestyle_form_sheet.dart';
 
-// --- UTILS (ADDED PREPROCESSORS HERE) ---
+// --- UTILS  ---
 import '../utils/face_processor.dart';
 import '../utils/clock_processor.dart';
 import '../utils/spiral_processor.dart'; //

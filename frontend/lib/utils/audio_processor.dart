@@ -47,8 +47,6 @@ class AudioProcessor {
     if (trueMaxMag < 1e-5)
       trueMaxMag = 1e-5; // Safety fallback for absolute silence
 
-    // 2. Librosa power_to_db (Relative to your TRUE voice peak)
-    double topDb = 80.0;
     // 2. Librosa power_to_db (With Dynamic Min/Max Tracking)
     List<List<double>> dbSpec = [];
     double minDb = double.infinity;
