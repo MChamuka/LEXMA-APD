@@ -52,7 +52,7 @@ class _HomePageState extends State<HomePage> {
   final List<String> _results = List.filled(5, "Not Analyzed");
   final List<double?> _probs = List.filled(5, null);
 
-  // 🔥 NEW: Stores detailed [AD, PD, Healthy] probabilities strictly for the Fusion Engine
+  //Stores detailed [AD, PD, Healthy] probabilities strictly for the Fusion Engine
   final List<Map<String, double>?> _detailedProbs = List.filled(5, null);
 
   List<MapEntry<String, double>> _topFactors = [];
@@ -321,21 +321,54 @@ class _HomePageState extends State<HomePage> {
           List<double> probs = await (model as ClassificationModel)
               .getImagePredictionList(processedClockBytes);
 
-          double adProb = probs[1];
-          double healthyProb = 1.0 - adProb;
-          double displayProb = adProb > 0.5 ? adProb : healthyProb;
+          String rawArrayText = probs.toString();
+          double adProb = 0.0;
+          double healthyProb = 0.0;
+          double displayProb = 0.0;
 
-          prediction = adProb > 0.5 ? "Alzheimer's" : "Healthy";
+          // Convert raw Logits to Percentages using Softmax!
+          if (probs.isNotEmpty) {
+            if (probs.length >= 2) {
+              double logit0 = probs[0]; // Healthy
+              double logit1 = probs[1]; // Alzheimer's
+
+              // Softmax Math prevents values from exceeding 1.0 (100%)
+              double maxVal = math.max(logit0, logit1);
+              double exp0 = math.exp(logit0 - maxVal);
+              double exp1 = math.exp(logit1 - maxVal);
+              double sumExp = exp0 + exp1;
+
+              healthyProb = exp0 / sumExp;
+              adProb = exp1 / sumExp;
+            } else {
+              // Fallback for single-output models (Sigmoid)
+              double val = probs[0];
+              adProb = 1.0 / (1.0 + math.exp(-val));
+              healthyProb = 1.0 - adProb;
+            }
+          }
+
+          // Determine the Winning Class
+          String diagText = "Healthy Pattern";
+          if (adProb > healthyProb) {
+            diagText = "Alzheimer's Detected";
+            displayProb = adProb;
+          } else {
+            diagText = "Healthy Pattern";
+            displayProb = healthyProb;
+          }
+
+          // Inject the WINNING percentage and the RAW printout into the UI
           String uiText =
-              "$prediction\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
+              "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
 
           File xaiImage =
-              await ClockXAIService.generateHeatmap(originalFile, prediction);
+              await ClockXAIService.generateHeatmap(originalFile, diagText);
 
           setState(() {
             _images[3] = xaiImage;
             _results[3] = uiText;
-            _probs[3] = adProb;
+            _probs[3] = adProb; // Overall anomaly score logic
             // 🔥 FED TO FUSION ENGINE
             _detailedProbs[3] = {'AD': adProb, 'PD': 0.0, 'H': healthyProb};
           });
