@@ -27,7 +27,7 @@ class ClockProcessor {
       }
     }
 
-    // If it found no ink (blank paper), just resize the original photo
+    // If it found no ink (blank paper), just resize
     if (minX > maxX || minY > maxY) {
       return img.encodeJpg(img.copyResize(original, width: 224, height: 224));
     }
@@ -39,12 +39,28 @@ class ClockProcessor {
     maxX = (maxX + pad).clamp(0, w - 1);
     maxY = (maxY + pad).clamp(0, h - 1);
 
-    // 3. Crop the ORIGINAL image (Preserving lighting and texture!)
+    // 3. Crop the ORIGINAL image
     img.Image cropped = img.copyCrop(original,
         x: minX, y: minY, width: maxX - minX, height: maxY - minY);
 
     // 4. Resize exactly to 224x224 for PyTorch
     img.Image finalImage = img.copyResize(cropped, width: 224, height: 224);
+
+    // 🔥 THE NEW FIX: BINARIZATION (Pure Black & White)
+    // This destroys all phone shadows and matches the clean training data!
+    for (int y = 0; y < 224; y++) {
+      for (int x = 0; x < 224; x++) {
+        var p = finalImage.getPixel(x, y);
+
+        // If the pixel is dark, make it PURE BLACK ink (R:0, G:0, B:0)
+        if (p.luminance < 130) {
+          finalImage.setPixelRgb(x, y, 0, 0, 0);
+        } else {
+          // If it's paper/shadow, make it PURE WHITE paper (R:255, G:255, B:255)
+          finalImage.setPixelRgb(x, y, 255, 255, 255);
+        }
+      }
+    }
 
     return img.encodeJpg(finalImage);
   }

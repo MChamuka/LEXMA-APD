@@ -10,7 +10,6 @@ import 'package:pytorch_lite/pytorch_lite.dart';
 import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 import '../utils/pytorch_native.dart';
 import 'dart:math' as math;
-import 'package:opencv_dart/opencv_dart.dart' as cv;
 import '../utils/audio_processor.dart';
 
 // --- MODELS & WIDGETS ---
@@ -38,7 +37,6 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  // --- MODELS ---
   ClassificationModel? _spiralModel;
   ClassificationModel? _audioModel;
   ClassificationModel? _dementiaModel;
@@ -51,8 +49,6 @@ class _HomePageState extends State<HomePage> {
   final List<File?> _images = List.filled(5, null);
   final List<String> _results = List.filled(5, "Not Analyzed");
   final List<double?> _probs = List.filled(5, null);
-
-  //Stores detailed [AD, PD, Healthy] probabilities strictly for the Fusion Engine
   final List<Map<String, double>?> _detailedProbs = List.filled(5, null);
 
   List<MapEntry<String, double>> _topFactors = [];
@@ -68,7 +64,6 @@ class _HomePageState extends State<HomePage> {
     HapticFeedback.selectionClick();
   }
 
-  // --- UI HELPERS ---
   Color _resultColor(String r) {
     final t = r.toLowerCase();
     if (t.contains("healthy")) return Colors.green;
@@ -101,7 +96,6 @@ class _HomePageState extends State<HomePage> {
   bool _isStepDone(int i) =>
       !_results[i].toLowerCase().contains("not analyzed");
 
-  // --- MODALITIES CONFIG ---
   List<ModalityUI> _mods() => [
         ModalityUI(
           index: 0,
@@ -220,7 +214,7 @@ class _HomePageState extends State<HomePage> {
     if (image != null) {
       setState(() {
         _images[index] = File(image.path);
-        _results[index] = "Analyzing...";
+        _results[index] = "Generating Explainable AI...";
       });
 
       try {
@@ -254,25 +248,32 @@ class _HomePageState extends State<HomePage> {
           }
 
           String diagText = "Healthy Pattern";
+          int targetClassIndex = 0;
           if (pdProb > healthyProb) {
             diagText = "Parkinson's Detected";
             displayProb = pdProb;
+            targetClassIndex = 1;
           } else {
             diagText = "Healthy Pattern";
             displayProb = healthyProb;
+            targetClassIndex = 0;
           }
 
           prediction =
               "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
 
+          // TRUE XAI FEATURE PERTURBATION
           File xaiImage = await FaceXAIService.generateHeatmap(
-              originalFile, diagText, landmarks);
+              imageFile: originalFile,
+              landmarks: landmarks,
+              originalFeatures: features,
+              baseLogit: probs[targetClassIndex],
+              targetClassIndex: targetClassIndex);
 
           setState(() {
             _images[0] = xaiImage;
             _results[0] = prediction;
             _probs[0] = pdProb;
-            // 🔥 FED TO FUSION ENGINE
             _detailedProbs[0] = {'AD': 0.0, 'PD': pdProb, 'H': healthyProb};
             _faceBiomarkers = FaceXAIService.getFaceBiomarkers(diagText);
           });
@@ -280,7 +281,6 @@ class _HomePageState extends State<HomePage> {
           // --- SPIRAL MODEL ---
           Uint8List processedSpiralBytes =
               await SpiralProcessor.process(originalFile);
-
           List<double> probs = await (model as ClassificationModel)
               .getImagePredictionList(processedSpiralBytes);
 
@@ -297,20 +297,24 @@ class _HomePageState extends State<HomePage> {
 
           double healthyProb = 1.0 - pdProb;
           double displayProb = pdProb > 0.5 ? pdProb : healthyProb;
+          int targetClassIndex = pdProb > 0.5 ? 1 : 0;
 
           String diagText =
               pdProb > 0.5 ? "Parkinson's Detected" : "Healthy Pattern";
           prediction =
               "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(2)}%";
 
-          File xaiImage =
-              await SpiralXAIService.generateHeatmap(originalFile, diagText);
+          // TRUE XAI OCCLUSION SENSITIVITY
+          File xaiImage = await SpiralXAIService.generateHeatmap(
+              originalFile: originalFile,
+              model: model,
+              baseLogit: probs[targetClassIndex],
+              targetClassIndex: targetClassIndex);
 
           setState(() {
             _images[1] = xaiImage;
             _results[1] = prediction;
             _probs[1] = pdProb;
-            // 🔥 FED TO FUSION ENGINE
             _detailedProbs[1] = {'AD': 0.0, 'PD': pdProb, 'H': healthyProb};
             _spiralBiomarkers = SpiralXAIService.getBiomarkers(diagText);
           });
@@ -326,13 +330,12 @@ class _HomePageState extends State<HomePage> {
           double healthyProb = 0.0;
           double displayProb = 0.0;
 
-          // Convert raw Logits to Percentages using Softmax!
           if (probs.isNotEmpty) {
             if (probs.length >= 2) {
-              double logit0 = probs[0]; // Healthy
-              double logit1 = probs[1]; // Alzheimer's
+              double temperature = 80.0;
+              double logit0 = probs[0] / temperature;
+              double logit1 = probs[1] / temperature;
 
-              // Softmax Math prevents values from exceeding 1.0 (100%)
               double maxVal = math.max(logit0, logit1);
               double exp0 = math.exp(logit0 - maxVal);
               double exp1 = math.exp(logit1 - maxVal);
@@ -340,36 +343,42 @@ class _HomePageState extends State<HomePage> {
 
               healthyProb = exp0 / sumExp;
               adProb = exp1 / sumExp;
+
+              adProb = adProb.clamp(0.04, 0.96);
+              healthyProb = 1.0 - adProb;
             } else {
-              // Fallback for single-output models (Sigmoid)
               double val = probs[0];
               adProb = 1.0 / (1.0 + math.exp(-val));
               healthyProb = 1.0 - adProb;
             }
           }
 
-          // Determine the Winning Class
+          int targetClassIndex = 0;
           String diagText = "Healthy Pattern";
           if (adProb > healthyProb) {
             diagText = "Alzheimer's Detected";
             displayProb = adProb;
+            targetClassIndex = 1;
           } else {
             diagText = "Healthy Pattern";
             displayProb = healthyProb;
+            targetClassIndex = 0;
           }
 
-          // Inject the WINNING percentage and the RAW printout into the UI
           String uiText =
               "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
 
-          File xaiImage =
-              await ClockXAIService.generateHeatmap(originalFile, diagText);
+          // TRUE XAI OCCLUSION SENSITIVITY
+          File xaiImage = await ClockXAIService.generateHeatmap(
+              originalFile: originalFile,
+              model: model,
+              baseLogit: probs[targetClassIndex],
+              targetClassIndex: targetClassIndex);
 
           setState(() {
             _images[3] = xaiImage;
             _results[3] = uiText;
-            _probs[3] = adProb; // Overall anomaly score logic
-            // 🔥 FED TO FUSION ENGINE
+            _probs[3] = adProb;
             _detailedProbs[3] = {'AD': adProb, 'PD': 0.0, 'H': healthyProb};
           });
         }
@@ -397,10 +406,12 @@ class _HomePageState extends State<HomePage> {
       });
     } else {
       final path = await _audioRecorder.stop();
-      setState(() => _isRecording = false);
+      setState(() {
+        _isRecording = false;
+        _results[2] = "Generating Explainable AI...";
+      });
 
       if (path != null && _audioModel != null) {
-        setState(() => _results[2] = "Analyzing...");
         try {
           Uint8List processedBytes = await AudioProcessor.process(File(path));
 
@@ -413,50 +424,51 @@ class _HomePageState extends State<HomePage> {
               await _audioModel!.getImagePredictionList(processedBytes);
           String rawArrayText = probs.toString();
 
-          double adProb = 0.0;
-          double pdProb = 0.0;
-          double healthyProb = 0.0;
+          double adProb = 0.0, pdProb = 0.0, healthyProb = 0.0;
 
           if (probs.isNotEmpty && probs.length == 3) {
             double temperature = 250.0;
-
             double logit0 = probs[0] / temperature;
             double logit1 = probs[1] / temperature;
             double logit2 = probs[2] / temperature;
 
             double maxVal = math.max(logit0, math.max(logit1, logit2));
-
             double exp0 = math.exp(logit0 - maxVal);
             double exp1 = math.exp(logit1 - maxVal);
             double exp2 = math.exp(logit2 - maxVal);
-
             double sumExp = exp0 + exp1 + exp2;
 
-            adProb = exp0 / sumExp; // Index 0: Alzheimer's
-            pdProb = exp1 / sumExp; // Index 1: Parkinson's
-            healthyProb = exp2 / sumExp; // Index 2: Healthy
+            adProb = exp0 / sumExp;
+            pdProb = exp1 / sumExp;
+            healthyProb = exp2 / sumExp;
           }
 
           double overallAnomalyScore = adProb + pdProb;
 
           String prediction = "Healthy Pattern";
+          int targetClassIndex = 2;
           if (adProb > pdProb && adProb > healthyProb) {
             prediction = "Alzheimer's Detected";
+            targetClassIndex = 0;
           } else if (pdProb > adProb && pdProb > healthyProb) {
             prediction = "Parkinson's Detected";
+            targetClassIndex = 1;
           }
 
           String uiText =
               "$prediction\nRAW: $rawArrayText\nAD: ${(adProb * 100).toStringAsFixed(1)}% | PD: ${(pdProb * 100).toStringAsFixed(1)}% | H: ${(healthyProb * 100).toStringAsFixed(1)}%";
 
-          File heatmap =
-              await AudioXAIService.generateHeatmap(rawSpec, prediction);
+          // TRUE XAI OCCLUSION SENSITIVITY
+          File heatmap = await AudioXAIService.generateHeatmap(
+              specFile: rawSpec,
+              model: _audioModel!,
+              baseLogit: probs[targetClassIndex],
+              targetClassIndex: targetClassIndex);
 
           setState(() {
             _images[2] = heatmap;
             _results[2] = uiText;
             _probs[2] = overallAnomalyScore;
-            // 🔥 FED TO FUSION ENGINE
             _detailedProbs[2] = {'AD': adProb, 'PD': pdProb, 'H': healthyProb};
             _audioBiomarkers = AudioXAIService.getBiomarkers(prediction);
           });
@@ -529,7 +541,6 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _results[4] = "$diag (${(maxVal * 100).toStringAsFixed(1)}%)";
         _probs[4] = maxVal;
-        // 🔥 FED TO FUSION ENGINE
         _detailedProbs[4] = {'AD': adScore, 'PD': pdScore, 'H': hScore};
       });
     } catch (e) {
@@ -588,33 +599,28 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildFusionDashboard() {
+    int completedCount = 0;
     double totalAD = 0, totalPD = 0, totalH = 0;
     int countAD = 0, countPD = 0, countH = 0;
 
-    // 1. GATHER INDEPENDENT EVIDENCE
     for (int i = 0; i < 5; i++) {
       if (_detailedProbs[i] != null) {
+        completedCount++;
         var p = _detailedProbs[i]!;
-
-        // Only count AD if the model actually tests for it (CDT, Voice, Lifestyle)
         if (i == 2 || i == 3 || i == 4) {
           totalAD += p['AD']!;
           countAD++;
         }
-
-        // Only count PD if the model actually tests for it (Face, Spiral, Voice, Lifestyle)
         if (i == 0 || i == 1 || i == 2 || i == 4) {
           totalPD += p['PD']!;
           countPD++;
         }
-
-        // All models test for Healthy
         totalH += p['H']!;
         countH++;
       }
     }
 
-    if (countH == 0) {
+    if (completedCount == 0) {
       return Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -636,18 +642,74 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    // 2. AVERAGING (Fixes the Modality Imbalance)
+    if (completedCount < 5) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.blueGrey.withOpacity(0.2)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.lock_clock, color: Colors.blueGrey),
+                SizedBox(width: 8),
+                Text("MULTIMODAL FUSION ENGINE",
+                    style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13,
+                        color: Colors.blueGrey,
+                        letterSpacing: 1.2)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_probs[0] != null) _buildFusionRow("Face Model", _probs[0]!),
+            if (_probs[1] != null) _buildFusionRow("Spiral Model", _probs[1]!),
+            if (_probs[2] != null) _buildFusionRow("Voice Model", _probs[2]!),
+            if (_probs[3] != null) _buildFusionRow("CDT Model", _probs[3]!),
+            if (_probs[4] != null)
+              _buildFusionRow("Lifestyle Data", _probs[4]!),
+            const Divider(height: 24),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  "Awaiting remaining data ($completedCount/5 Modalities)",
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blueGrey),
+                ),
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: LinearProgressIndicator(
+                    value: completedCount / 5.0,
+                    minHeight: 8,
+                    backgroundColor: Colors.grey.shade200,
+                    color: Colors.blue,
+                  ),
+                ),
+              ],
+            )
+          ],
+        ),
+      );
+    }
+
     double avgAD = countAD > 0 ? (totalAD / countAD) : 0.0;
     double avgPD = countPD > 0 ? (totalPD / countPD) : 0.0;
     double avgH = (totalH / countH);
 
-    // 3. SOFTMAX NORMALIZATION (Forces them to equal 100%)
     double sumAverages = avgAD + avgPD + avgH;
     double finalAD = avgAD / sumAverages;
     double finalPD = avgPD / sumAverages;
     double finalH = avgH / sumAverages;
 
-    // 4. DETERMINE THE ULTIMATE WINNER
     String diagnosis = "Healthy Pattern";
     double displayProb = finalH;
     Color displayColor = Colors.green;
@@ -692,11 +754,11 @@ class _HomePageState extends State<HomePage> {
             ],
           ),
           const SizedBox(height: 12),
-          if (_probs[0] != null) _buildFusionRow("Face Model", _probs[0]!),
-          if (_probs[1] != null) _buildFusionRow("Spiral Model", _probs[1]!),
-          if (_probs[2] != null) _buildFusionRow("Voice Model", _probs[2]!),
-          if (_probs[3] != null) _buildFusionRow("CDT Model", _probs[3]!),
-          if (_probs[4] != null) _buildFusionRow("Lifestyle Data", _probs[4]!),
+          _buildFusionRow("Face Model", _probs[0]!),
+          _buildFusionRow("Spiral Model", _probs[1]!),
+          _buildFusionRow("Voice Model", _probs[2]!),
+          _buildFusionRow("CDT Model", _probs[3]!),
+          _buildFusionRow("Lifestyle Data", _probs[4]!),
           const Divider(height: 24),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -779,7 +841,7 @@ class _HomePageState extends State<HomePage> {
           actions: [
             IconButton(
                 icon: const Icon(Icons.help_outline),
-                onPressed: () => setState(() => _showHelp = !_showHelp)),
+                onPressed: () => setState(() => _showHelp = !_showHelp))
           ],
         ),
         body: !_areModelsLoaded
@@ -808,11 +870,10 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildHelpBanner() {
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      padding: const EdgeInsets.all(12),
-      color: Colors.blue.withOpacity(0.08),
-      child: const Text("Follow the steps. Each step shows a clear result."),
-    );
+        margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        padding: const EdgeInsets.all(12),
+        color: Colors.blue.withOpacity(0.08),
+        child: const Text("Follow the steps. Each step shows a clear result."));
   }
 
   Widget _buildStepStrip() {
