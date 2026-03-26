@@ -10,7 +10,6 @@ import 'package:pytorch_lite/pytorch_lite.dart';
 import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 import '../utils/pytorch_native.dart';
 import 'dart:math' as math;
-import 'package:opencv_dart/opencv_dart.dart' as cv;
 import '../utils/audio_processor.dart';
 
 // --- MODELS & WIDGETS ---
@@ -25,7 +24,6 @@ import '../utils/spiral_processor.dart'; //
 
 // --- SERVICES ---
 import '../services/lifestyle_service.dart';
-import '../services/audio_sevice.dart';
 import '../services/audio_xai_service.dart';
 import '../services/face_xai_service.dart';
 import '../services/clock_xai_service.dart';
