@@ -20,7 +20,7 @@ import '../widgets/lifestyle_form_sheet.dart';
 // --- UTILS  ---
 import '../utils/face_processor.dart';
 import '../utils/clock_processor.dart';
-import '../utils/spiral_processor.dart'; //
+import '../utils/spiral_processor.dart';
 
 // --- SERVICES ---
 import '../services/lifestyle_service.dart';
@@ -28,6 +28,7 @@ import '../services/audio_xai_service.dart';
 import '../services/face_xai_service.dart';
 import '../services/clock_xai_service.dart';
 import '../services/spiral_xai_service.dart';
+import '../services/database_service.dart'; // 🔥 SQLite Database Service
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -51,6 +52,8 @@ class _HomePageState extends State<HomePage> {
   final List<double?> _probs = List.filled(5, null);
   final List<Map<String, double>?> _detailedProbs = List.filled(5, null);
 
+  bool _hasSavedResult = false; // 🔥 Safety flag to prevent duplicate DB saves
+
   List<MapEntry<String, double>> _topFactors = [];
   List<String> _audioBiomarkers = [];
   List<String> _faceBiomarkers = [];
@@ -70,15 +73,16 @@ class _HomePageState extends State<HomePage> {
     if (t.contains("alzheimer")) return Colors.redAccent;
     if (t.contains("parkinson")) return Colors.orangeAccent;
     if (t.contains("error")) return Colors.red;
-    if (t.contains("analyzing") || t.contains("recording"))
-      return Colors.blueGrey;
+    if (t.contains("analyzing") ||
+        t.contains("recording") ||
+        t.contains("generating")) return Colors.blueGrey;
     return Colors.grey;
   }
 
   String _resultBadgeText(String r) {
     final t = r.toLowerCase();
     if (t.contains("not analyzed")) return "Not done";
-    if (t.contains("analyzing")) return "Working";
+    if (t.contains("analyzing") || t.contains("generating")) return "Working";
     if (t.contains("recording")) return "Recording";
     if (t.contains("error")) return "Error";
     return "Done";
@@ -87,7 +91,8 @@ class _HomePageState extends State<HomePage> {
   IconData _badgeIcon(String r) {
     final t = r.toLowerCase();
     if (t.contains("not analyzed")) return Icons.radio_button_unchecked;
-    if (t.contains("analyzing")) return Icons.hourglass_bottom;
+    if (t.contains("analyzing") || t.contains("generating"))
+      return Icons.hourglass_bottom;
     if (t.contains("recording")) return Icons.mic;
     if (t.contains("error")) return Icons.error_outline;
     return Icons.check_circle_outline;
@@ -206,6 +211,84 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // 🔥 THE SQLITE AUTO-SAVE FUNCTION
+  Future<void> _checkAndSaveIfComplete() async {
+    if (_hasSavedResult) return;
+
+    int completedCount = 0;
+    double totalAD = 0, totalPD = 0, totalH = 0;
+    int countAD = 0, countPD = 0, countH = 0;
+
+    for (int i = 0; i < 5; i++) {
+      if (_detailedProbs[i] != null) {
+        completedCount++;
+        var p = _detailedProbs[i]!;
+        if (i == 2 || i == 3 || i == 4) {
+          totalAD += p['AD']!;
+          countAD++;
+        }
+        if (i == 0 || i == 1 || i == 2 || i == 4) {
+          totalPD += p['PD']!;
+          countPD++;
+        }
+        totalH += p['H']!;
+        countH++;
+      }
+    }
+
+    // Only triggers when the 5th lock opens
+    if (completedCount == 5) {
+      _hasSavedResult = true;
+
+      double avgAD = countAD > 0 ? (totalAD / countAD) : 0.0;
+      double avgPD = countPD > 0 ? (totalPD / countPD) : 0.0;
+      double avgH = (totalH / countH);
+
+      double sumAverages = avgAD + avgPD + avgH;
+      double finalAD = avgAD / sumAverages;
+      double finalPD = avgPD / sumAverages;
+      double finalH = avgH / sumAverages;
+
+      String diagnosis = "Healthy Pattern";
+      double displayProb = finalH;
+
+      if (finalAD > finalPD && finalAD > finalH) {
+        diagnosis = "Alzheimer's Detected";
+        displayProb = finalAD;
+      } else if (finalPD > finalAD && finalPD > finalH) {
+        diagnosis = "Parkinson's Detected";
+        displayProb = finalPD;
+      }
+
+      Map<String, dynamic> record = {
+        'timestamp': DateTime.now().toIso8601String(),
+        'face_prob': _probs[0],
+        'spiral_prob': _probs[1],
+        'voice_prob': _probs[2],
+        'cdt_prob': _probs[3],
+        'lifestyle_prob': _probs[4],
+        'final_confidence': displayProb,
+        'diagnosis': diagnosis,
+      };
+
+      try {
+        await DatabaseService.instance.saveAssessment(record);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content:
+                  Text("Diagnostic result securely saved to local database."),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      } catch (e) {
+        print("Database Save Error: $e");
+      }
+    }
+  }
+
   Future<void> _pickImage(int index, dynamic model) async {
     if (model == null) return;
     final ImagePicker picker = ImagePicker();
@@ -235,10 +318,7 @@ class _HomePageState extends State<HomePage> {
           List<double> probs = await PyTorchNative.predictFace(features);
           String rawArrayText = probs.toString();
 
-          double healthyProb = 0.0;
-          double pdProb = 0.0;
-          double displayProb = 0.0;
-
+          double healthyProb = 0.0, pdProb = 0.0, displayProb = 0.0;
           if (probs.isNotEmpty && probs.length >= 2) {
             healthyProb = probs[0];
             pdProb = probs[1];
@@ -262,7 +342,6 @@ class _HomePageState extends State<HomePage> {
           prediction =
               "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
 
-          // TRUE XAI FEATURE PERTURBATION
           File xaiImage = await FaceXAIService.generateHeatmap(
               imageFile: originalFile,
               landmarks: landmarks,
@@ -304,7 +383,6 @@ class _HomePageState extends State<HomePage> {
           prediction =
               "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(2)}%";
 
-          // TRUE XAI OCCLUSION SENSITIVITY
           File xaiImage = await SpiralXAIService.generateHeatmap(
               originalFile: originalFile,
               model: model,
@@ -326,9 +404,7 @@ class _HomePageState extends State<HomePage> {
               .getImagePredictionList(processedClockBytes);
 
           String rawArrayText = probs.toString();
-          double adProb = 0.0;
-          double healthyProb = 0.0;
-          double displayProb = 0.0;
+          double adProb = 0.0, healthyProb = 0.0, displayProb = 0.0;
 
           if (probs.isNotEmpty) {
             if (probs.length >= 2) {
@@ -368,7 +444,6 @@ class _HomePageState extends State<HomePage> {
           String uiText =
               "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
 
-          // TRUE XAI OCCLUSION SENSITIVITY
           File xaiImage = await ClockXAIService.generateHeatmap(
               originalFile: originalFile,
               model: model,
@@ -385,6 +460,9 @@ class _HomePageState extends State<HomePage> {
       } catch (e) {
         setState(() => _results[index] = "Error: $e");
       }
+
+      // 🔥 CHECK & SAVE SQLITE DB
+      _checkAndSaveIfComplete();
     }
   }
 
@@ -414,7 +492,6 @@ class _HomePageState extends State<HomePage> {
       if (path != null && _audioModel != null) {
         try {
           Uint8List processedBytes = await AudioProcessor.process(File(path));
-
           final tempDir = await getTemporaryDirectory();
           File rawSpec = File(
               '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.jpg');
@@ -458,7 +535,6 @@ class _HomePageState extends State<HomePage> {
           String uiText =
               "$prediction\nRAW: $rawArrayText\nAD: ${(adProb * 100).toStringAsFixed(1)}% | PD: ${(pdProb * 100).toStringAsFixed(1)}% | H: ${(healthyProb * 100).toStringAsFixed(1)}%";
 
-          // TRUE XAI OCCLUSION SENSITIVITY
           File heatmap = await AudioXAIService.generateHeatmap(
               specFile: rawSpec,
               model: _audioModel!,
@@ -475,6 +551,9 @@ class _HomePageState extends State<HomePage> {
         } catch (e) {
           setState(() => _results[2] = "Error: $e");
         }
+
+        // 🔥 CHECK & SAVE SQLITE DB
+        _checkAndSaveIfComplete();
       }
     }
   }
@@ -546,6 +625,9 @@ class _HomePageState extends State<HomePage> {
     } catch (e) {
       setState(() => _results[4] = "Error");
     }
+
+    // 🔥 CHECK & SAVE SQLITE DB
+    _checkAndSaveIfComplete();
     Navigator.pop(context);
   }
 
@@ -600,33 +682,15 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildFusionDashboard() {
     int completedCount = 0;
-    double totalAD = 0, totalPD = 0, totalH = 0;
-    int countAD = 0, countPD = 0, countH = 0;
-
     for (int i = 0; i < 5; i++) {
-      if (_detailedProbs[i] != null) {
-        completedCount++;
-        var p = _detailedProbs[i]!;
-        if (i == 2 || i == 3 || i == 4) {
-          totalAD += p['AD']!;
-          countAD++;
-        }
-        if (i == 0 || i == 1 || i == 2 || i == 4) {
-          totalPD += p['PD']!;
-          countPD++;
-        }
-        totalH += p['H']!;
-        countH++;
-      }
+      if (_detailedProbs[i] != null) completedCount++;
     }
 
     if (completedCount == 0) {
       return Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-        ),
+            color: Colors.white, borderRadius: BorderRadius.circular(16)),
         child: Row(
           children: [
             const Icon(Icons.hub, color: Colors.blue),
@@ -642,6 +706,7 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
+    // STATE 2: LOCKED
     if (completedCount < 5) {
       return Container(
         padding: const EdgeInsets.all(16),
@@ -676,29 +741,43 @@ class _HomePageState extends State<HomePage> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  "Awaiting remaining data ($completedCount/5 Modalities)",
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.blueGrey),
-                ),
+                Text("Awaiting remaining data ($completedCount/5 Modalities)",
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blueGrey)),
                 const SizedBox(height: 10),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(10),
                   child: LinearProgressIndicator(
-                    value: completedCount / 5.0,
-                    minHeight: 8,
-                    backgroundColor: Colors.grey.shade200,
-                    color: Colors.blue,
-                  ),
+                      value: completedCount / 5.0,
+                      minHeight: 8,
+                      backgroundColor: Colors.grey.shade200,
+                      color: Colors.blue),
                 ),
               ],
             )
           ],
         ),
       );
+    }
+
+    // STATE 3: UNLOCKED
+    double totalAD = 0, totalPD = 0, totalH = 0;
+    int countAD = 0, countPD = 0, countH = 0;
+    for (int i = 0; i < 5; i++) {
+      var p = _detailedProbs[i]!;
+      if (i == 2 || i == 3 || i == 4) {
+        totalAD += p['AD']!;
+        countAD++;
+      }
+      if (i == 0 || i == 1 || i == 2 || i == 4) {
+        totalPD += p['PD']!;
+        countPD++;
+      }
+      totalH += p['H']!;
+      countH++;
     }
 
     double avgAD = countAD > 0 ? (totalAD / countAD) : 0.0;
@@ -781,17 +860,14 @@ class _HomePageState extends State<HomePage> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: displayColor,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    diagnosis,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13),
-                  ),
+                      color: displayColor,
+                      borderRadius: BorderRadius.circular(12)),
+                  child: Text(diagnosis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13)),
                 ),
               )
             ],
