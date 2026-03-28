@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 
 class ClockProcessor {
-  // 🔥 FIXED: Pure Dart Noise Removal (Replaces OpenCV Morphology)
+  //Pure Dart Noise Removal (Replaces OpenCV Morphology)
   // Scans for tiny stray black dots (shadows/noise) and deletes them safely.
   static img.Image removeNoise(img.Image src) {
     // Create a copy to edit safely
@@ -92,7 +92,7 @@ class ClockProcessor {
       }
     }
 
-    // 6. 🔥 APPLY NOISE REMOVAL (Replaces Morphology)
+    // 6. APPLY NOISE REMOVAL (Replaces Morphology)
     final processedImage = removeNoise(finalImage);
 
     return img.encodeJpg(processedImage);
