@@ -222,35 +222,50 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // 🔥 THE SQLITE AUTO-SAVE FUNCTION
   Future<void> _checkAndSaveIfComplete() async {
     if (_hasSavedResult) return;
+
     int completedCount = 0;
+
+    // 🧠 FIX OPTION 1: Validation-Weighted Fusion
+    // These weights represent the Validation Accuracy of each individual model
+    // Index: [Face, Spiral, Voice, CDT, Lifestyle]
+    List<double> weights = [0.850, 0.900, 0.880, 0.786, 0.850];
+
     double totalAD = 0, totalPD = 0, totalH = 0;
-    int countAD = 0, countPD = 0, countH = 0;
+    double sumWeightAD = 0, sumWeightPD = 0, sumWeightH = 0;
 
     for (int i = 0; i < 5; i++) {
       if (_detailedProbs[i] != null) {
         completedCount++;
         var p = _detailedProbs[i]!;
+        double w = weights[i];
+
+        // Apply the weight ONLY to the diseases this model was trained to detect
         if (i == 2 || i == 3 || i == 4) {
-          totalAD += p['AD']!;
-          countAD++;
+          totalAD += p['AD']! * w;
+          sumWeightAD += w;
         }
         if (i == 0 || i == 1 || i == 2 || i == 4) {
-          totalPD += p['PD']!;
-          countPD++;
+          totalPD += p['PD']! * w;
+          sumWeightPD += w;
         }
-        totalH += p['H']!;
-        countH++;
+        totalH += p['H']! * w;
+        sumWeightH += w;
       }
     }
 
+    // Only triggers when the 5th lock opens
     if (completedCount == 5) {
       _hasSavedResult = true;
-      double avgAD = countAD > 0 ? (totalAD / countAD) : 0.0;
-      double avgPD = countPD > 0 ? (totalPD / countPD) : 0.0;
-      double avgH = (totalH / countH);
 
+      // Calculate Weighted Averages
+      double avgAD = sumWeightAD > 0 ? (totalAD / sumWeightAD) : 0.0;
+      double avgPD = sumWeightPD > 0 ? (totalPD / sumWeightPD) : 0.0;
+      double avgH = sumWeightH > 0 ? (totalH / sumWeightH) : 0.0;
+
+      // Softmax Normalization
       double sumAverages = avgAD + avgPD + avgH;
       double finalAD = avgAD / sumAverages;
       double finalPD = avgPD / sumAverages;
@@ -281,11 +296,14 @@ class _HomePageState extends State<HomePage> {
       try {
         await DatabaseService.instance.saveAssessment(record);
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
               content:
                   Text("Diagnostic result securely saved to local database."),
               backgroundColor: Colors.green,
-              duration: Duration(seconds: 3)));
+              duration: Duration(seconds: 3),
+            ),
+          );
         }
       } catch (e) {
         print("Database Save Error: $e");
@@ -714,6 +732,7 @@ class _HomePageState extends State<HomePage> {
       if (_detailedProbs[i] != null) completedCount++;
     }
 
+    // STATE 1: NOT STARTED
     if (completedCount == 0) {
       return Container(
         padding: const EdgeInsets.all(14),
@@ -734,6 +753,7 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
+    // STATE 2: LOCKED (Awaiting remaining modalities)
     if (completedCount < 5) {
       return Container(
         padding: const EdgeInsets.all(16),
@@ -790,25 +810,34 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
+    // STATE 3: UNLOCKED (All 5 modalities complete)
+    // 🔥 THE NEW FIX: Validation-Weighted Independent Averaging
+    List<double> weights = [0.850, 0.900, 0.880, 0.786, 0.850];
+
     double totalAD = 0, totalPD = 0, totalH = 0;
-    int countAD = 0, countPD = 0, countH = 0;
+    double sumWeightAD = 0, sumWeightPD = 0, sumWeightH = 0;
+
     for (int i = 0; i < 5; i++) {
       var p = _detailedProbs[i]!;
+      double w = weights[i];
+
       if (i == 2 || i == 3 || i == 4) {
-        totalAD += p['AD']!;
-        countAD++;
+        totalAD += p['AD']! * w;
+        sumWeightAD += w;
       }
       if (i == 0 || i == 1 || i == 2 || i == 4) {
-        totalPD += p['PD']!;
-        countPD++;
+        totalPD += p['PD']! * w;
+        sumWeightPD += w;
       }
-      totalH += p['H']!;
-      countH++;
+      totalH += p['H']! * w;
+      sumWeightH += w;
     }
 
-    double avgAD = countAD > 0 ? (totalAD / countAD) : 0.0;
-    double avgPD = countPD > 0 ? (totalPD / countPD) : 0.0;
-    double avgH = (totalH / countH);
+    double avgAD = sumWeightAD > 0 ? (totalAD / sumWeightAD) : 0.0;
+    double avgPD = sumWeightPD > 0 ? (totalPD / sumWeightPD) : 0.0;
+    double avgH = sumWeightH > 0 ? (totalH / sumWeightH) : 0.0;
+
+    // Final Softmax Normalization
     double sumAverages = avgAD + avgPD + avgH;
     double finalAD = avgAD / sumAverages;
     double finalPD = avgPD / sumAverages;
