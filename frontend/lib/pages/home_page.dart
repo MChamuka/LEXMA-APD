@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 import 'dart:io';
+import 'dart:convert'; // 🔥 NEW: Required for parsing the JSON Schema
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -11,7 +12,8 @@ import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 import '../utils/pytorch_native.dart';
 import 'dart:math' as math;
 import '../utils/audio_processor.dart';
-import 'history_page.dart'; // Adjust path if you put it in a different folder
+import 'history_page.dart';
+
 // --- MODELS & WIDGETS ---
 import '../models/modality_model.dart';
 import '../widgets/ui_components.dart';
@@ -23,12 +25,11 @@ import '../utils/clock_processor.dart';
 import '../utils/spiral_processor.dart';
 
 // --- SERVICES ---
-import '../services/lifestyle_service.dart';
 import '../services/audio_xai_service.dart';
 import '../services/face_xai_service.dart';
 import '../services/clock_xai_service.dart';
 import '../services/spiral_xai_service.dart';
-import '../services/database_service.dart'; // 🔥 SQLite Database Service
+import '../services/database_service.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -42,8 +43,11 @@ class _HomePageState extends State<HomePage> {
   ClassificationModel? _audioModel;
   ClassificationModel? _dementiaModel;
   tfl.Interpreter? _lifestyleInterpreter;
-  bool _areModelsLoaded = false;
 
+  Map<String, dynamic>?
+      _lifestyleSchema; // 🔥 NEW: Holds the Python preprocessor rules
+
+  bool _areModelsLoaded = false;
   final AudioRecorder _audioRecorder = AudioRecorder();
   bool _isRecording = false;
 
@@ -52,7 +56,7 @@ class _HomePageState extends State<HomePage> {
   final List<double?> _probs = List.filled(5, null);
   final List<Map<String, double>?> _detailedProbs = List.filled(5, null);
 
-  bool _hasSavedResult = false; // 🔥 Safety flag to prevent duplicate DB saves
+  bool _hasSavedResult = false;
 
   List<MapEntry<String, double>> _topFactors = [];
   List<String> _audioBiomarkers = [];
@@ -106,7 +110,7 @@ class _HomePageState extends State<HomePage> {
           index: 0,
           stepName: "Face",
           title: "Face Check",
-          subtitle: "Upload a face photo for analysis",
+          subtitle: "Upload a face photo",
           icon: Icons.face_retouching_natural,
           primaryButton: "Upload Photo",
           type: 'image',
@@ -120,20 +124,19 @@ class _HomePageState extends State<HomePage> {
           index: 1,
           stepName: "Spiral",
           title: "Spiral Test",
-          subtitle: "Upload a photo of your drawn spiral",
+          subtitle: "Upload drawn spiral",
           icon: Icons.draw,
-          primaryButton: "Upload Spiral Photo",
+          primaryButton: "Upload Spiral",
           type: 'image',
           model: _spiralModel,
           explainTitle: "Spiral Explanation",
-          explainBody:
-              "This test analyzes motor-control patterns from your pen strokes.",
+          explainBody: "Analyzes motor-control patterns.",
         ),
         ModalityUI(
           index: 2,
           stepName: "Voice",
           title: "Voice Check",
-          subtitle: "Record a short voice sample",
+          subtitle: "Record voice sample",
           icon: Icons.mic,
           primaryButton: _isRecording ? "Stop Recording" : "Record Voice",
           type: 'audio',
@@ -147,13 +150,13 @@ class _HomePageState extends State<HomePage> {
           index: 3,
           stepName: "CDT",
           title: "Clock Drawing",
-          subtitle: "Upload ClockDrawing image",
+          subtitle: "Upload CDT image",
           icon: Icons.image_search,
           primaryButton: "Upload CDT",
           type: 'image',
           model: _dementiaModel,
-          explainTitle: "ClockDrawing Explanation",
-          explainBody: "After analysis, the diagnosis result will be shown.",
+          explainTitle: "Clock Explanation",
+          explainBody: "Diagnosis result will be shown here.",
         ),
         ModalityUI(
           index: 4,
@@ -166,7 +169,7 @@ class _HomePageState extends State<HomePage> {
           model: null,
           explainTitle: "Lifestyle Explanation",
           explainBody: _topFactors.isEmpty
-              ? "After analysis, top contributing factors will show here."
+              ? "Top contributing factors will show here."
               : null,
         ),
       ];
@@ -206,15 +209,21 @@ class _HomePageState extends State<HomePage> {
           "assets/models/finalNhats_fixed.ptl", "assets/labels.txt", 2);
       _lifestyleInterpreter =
           await tfl.Interpreter.fromAsset('assets/models/lifestyle.tflite');
+
+      // 🔥 NEW: LOAD THE JSON SCHEMA
+      String schemaStr =
+          await rootBundle.loadString('assets/models/lifestyle_schema.json');
+      _lifestyleSchema = json.decode(schemaStr);
+      print("✅ Successfully loaded dynamic Lifestyle Schema from Python!");
+    } catch (e) {
+      print("⚠️ Error loading models/schema: $e");
     } finally {
       if (mounted) setState(() => _areModelsLoaded = true);
     }
   }
 
-  // 🔥 THE SQLITE AUTO-SAVE FUNCTION
   Future<void> _checkAndSaveIfComplete() async {
     if (_hasSavedResult) return;
-
     int completedCount = 0;
     double totalAD = 0, totalPD = 0, totalH = 0;
     int countAD = 0, countPD = 0, countH = 0;
@@ -236,10 +245,8 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
-    // Only triggers when the 5th lock opens
     if (completedCount == 5) {
       _hasSavedResult = true;
-
       double avgAD = countAD > 0 ? (totalAD / countAD) : 0.0;
       double avgPD = countPD > 0 ? (totalPD / countPD) : 0.0;
       double avgH = (totalH / countH);
@@ -274,14 +281,11 @@ class _HomePageState extends State<HomePage> {
       try {
         await DatabaseService.instance.saveAssessment(record);
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content:
                   Text("Diagnostic result securely saved to local database."),
               backgroundColor: Colors.green,
-              duration: Duration(seconds: 3),
-            ),
-          );
+              duration: Duration(seconds: 3)));
         }
       } catch (e) {
         print("Database Save Error: $e");
@@ -305,7 +309,6 @@ class _HomePageState extends State<HomePage> {
         String prediction = "Error";
 
         if (index == 0) {
-          // --- FACE MODEL ---
           final faceData = await FaceImageProcessor.process(originalFile);
           if (faceData == null) {
             setState(() => _results[0] = "Error: No face detected");
@@ -314,7 +317,6 @@ class _HomePageState extends State<HomePage> {
 
           List<double> features = faceData['features'];
           Map<String, List<double>> landmarks = faceData['landmarks'];
-
           List<double> probs = await PyTorchNative.predictFace(features);
           String rawArrayText = probs.toString();
 
@@ -341,14 +343,12 @@ class _HomePageState extends State<HomePage> {
 
           prediction =
               "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
-
           File xaiImage = await FaceXAIService.generateHeatmap(
               imageFile: originalFile,
               landmarks: landmarks,
               originalFeatures: features,
               baseLogit: probs[targetClassIndex],
               targetClassIndex: targetClassIndex);
-
           setState(() {
             _images[0] = xaiImage;
             _results[0] = prediction;
@@ -357,7 +357,6 @@ class _HomePageState extends State<HomePage> {
             _faceBiomarkers = FaceXAIService.getFaceBiomarkers(diagText);
           });
         } else if (index == 1) {
-          // --- SPIRAL MODEL ---
           Uint8List processedSpiralBytes =
               await SpiralProcessor.process(originalFile);
           List<double> probs = await (model as ClassificationModel)
@@ -365,7 +364,6 @@ class _HomePageState extends State<HomePage> {
 
           String rawArrayText = probs.toString();
           double pdProb = 0.0;
-
           if (probs.isNotEmpty) {
             if (probs.length >= 2) {
               pdProb = probs[1];
@@ -382,13 +380,11 @@ class _HomePageState extends State<HomePage> {
               pdProb > 0.5 ? "Parkinson's Detected" : "Healthy Pattern";
           prediction =
               "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(2)}%";
-
           File xaiImage = await SpiralXAIService.generateHeatmap(
               originalFile: originalFile,
               model: model,
               baseLogit: probs[targetClassIndex],
               targetClassIndex: targetClassIndex);
-
           setState(() {
             _images[1] = xaiImage;
             _results[1] = prediction;
@@ -397,7 +393,6 @@ class _HomePageState extends State<HomePage> {
             _spiralBiomarkers = SpiralXAIService.getBiomarkers(diagText);
           });
         } else if (index == 3) {
-          // --- CDT MODEL ---
           Uint8List processedClockBytes =
               await ClockProcessor.process(originalFile);
           List<double> probs = await (model as ClassificationModel)
@@ -411,15 +406,12 @@ class _HomePageState extends State<HomePage> {
               double temperature = 80.0;
               double logit0 = probs[0] / temperature;
               double logit1 = probs[1] / temperature;
-
               double maxVal = math.max(logit0, logit1);
               double exp0 = math.exp(logit0 - maxVal);
               double exp1 = math.exp(logit1 - maxVal);
               double sumExp = exp0 + exp1;
-
               healthyProb = exp0 / sumExp;
               adProb = exp1 / sumExp;
-
               adProb = adProb.clamp(0.04, 0.96);
               healthyProb = 1.0 - adProb;
             } else {
@@ -443,13 +435,11 @@ class _HomePageState extends State<HomePage> {
 
           String uiText =
               "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
-
           File xaiImage = await ClockXAIService.generateHeatmap(
               originalFile: originalFile,
               model: model,
               baseLogit: probs[targetClassIndex],
               targetClassIndex: targetClassIndex);
-
           setState(() {
             _images[3] = xaiImage;
             _results[3] = uiText;
@@ -460,8 +450,6 @@ class _HomePageState extends State<HomePage> {
       } catch (e) {
         setState(() => _results[index] = "Error: $e");
       }
-
-      // 🔥 CHECK & SAVE SQLITE DB
       _checkAndSaveIfComplete();
     }
   }
@@ -520,7 +508,6 @@ class _HomePageState extends State<HomePage> {
           }
 
           double overallAnomalyScore = adProb + pdProb;
-
           String prediction = "Healthy Pattern";
           int targetClassIndex = 2;
           if (adProb > pdProb && adProb > healthyProb) {
@@ -533,13 +520,11 @@ class _HomePageState extends State<HomePage> {
 
           String uiText =
               "$prediction\nRAW: $rawArrayText\nAD: ${(adProb * 100).toStringAsFixed(1)}% | PD: ${(pdProb * 100).toStringAsFixed(1)}% | H: ${(healthyProb * 100).toStringAsFixed(1)}%";
-
           File heatmap = await AudioXAIService.generateHeatmap(
               specFile: rawSpec,
               model: _audioModel!,
               baseLogit: probs[targetClassIndex],
               targetClassIndex: targetClassIndex);
-
           setState(() {
             _images[2] = heatmap;
             _results[2] = uiText;
@@ -550,47 +535,82 @@ class _HomePageState extends State<HomePage> {
         } catch (e) {
           setState(() => _results[2] = "Error: $e");
         }
-
-        // 🔥 CHECK & SAVE SQLITE DB
         _checkAndSaveIfComplete();
       }
     }
   }
 
-  List<double> _oneHot(int selectedIndex, int totalCategories) {
-    List<double> output = List.filled(totalCategories, 0.0);
-    if (selectedIndex >= 0 && selectedIndex < totalCategories)
-      output[selectedIndex] = 1.0;
-    return output;
-  }
-
+  // 🔥 THE NEW DYNAMIC INPUT BUILDER (Strictly uses JSON Schema)
   List<double> _buildInputRow(
       Map<String, double> numericals, Map<String, int> cats) {
+    if (_lifestyleSchema == null) return []; // Safety fallback
+
+    List<String> featureOrder =
+        List<String>.from(_lifestyleSchema!['feature_names_out']);
+    List<double> means = List<double>.from(_lifestyleSchema!['means']);
+    List<double> stds = List<double>.from(_lifestyleSchema!['stds']);
+    List<String> numCols =
+        List<String>.from(_lifestyleSchema!['numerical_cols']);
+
+    // Maps Python's column names to your Flutter variable names
+    Map<String, String> pythonToDartCat = {
+      'Gender': 'gender',
+      'Ethnicity': 'ethnicity',
+      'EducationLevel': 'education',
+      'Smoking': 'smoking',
+      'Hypertension': 'hypertension',
+      'Diabetes': 'diabetes',
+      'Depression': 'depression'
+    };
+
     List<double> row = [];
-    row.addAll(_oneHot(cats['gender']!, 2));
-    row.addAll(_oneHot(cats['ethnicity']!, 4));
-    row.addAll(_oneHot(cats['education']!, 4));
-    row.addAll(_oneHot(cats['smoking']!, 2));
-    row.addAll(_oneHot(cats['hypertension']!, 2));
-    row.addAll(_oneHot(cats['diabetes']!, 2));
-    row.addAll(_oneHot(cats['depression']!, 2));
-    row.addAll([
-      DataConfig.normalize('Age', numericals['Age']!),
-      DataConfig.normalize('BMI', numericals['BMI']!),
-      DataConfig.normalize('Alcohol', numericals['Alcohol']!),
-      DataConfig.normalize('Activity', numericals['Activity']!),
-      DataConfig.normalize('Diet', numericals['Diet']!),
-      DataConfig.normalize('Sleep', numericals['Sleep']!),
-      DataConfig.normalize('Tasks', numericals['Tasks']!)
-    ]);
+
+    for (String feature in featureOrder) {
+      if (feature.startsWith('num__')) {
+        // Handle Numerical Data (e.g. "num__Age")
+        String colName = feature.substring(5);
+        int idx = numCols.indexOf(colName);
+
+        double rawVal = numericals[colName] ?? 0.0;
+        double normVal =
+            (rawVal - means[idx]) / stds[idx]; // Scale dynamically!
+        row.add(normVal);
+      } else if (feature.startsWith('cat__')) {
+        // Handle Categorical One-Hot Data (e.g. "cat__Gender_0")
+        String withoutCat = feature.substring(5);
+        int lastUnderscore = withoutCat.lastIndexOf('_');
+
+        String colName = withoutCat.substring(0, lastUnderscore); // "Gender"
+        String catValStr =
+            withoutCat.substring(lastUnderscore + 1); // "0" or "0.0"
+
+        String dartKey = pythonToDartCat[colName] ?? colName.toLowerCase();
+        int userSelected = cats[dartKey] ?? 0;
+
+        // Compare what the user picked to this specific One-Hot neuron
+        double catValTarget = double.tryParse(catValStr) ?? -1;
+        if (userSelected.toDouble() == catValTarget) {
+          row.add(1.0);
+        } else {
+          row.add(0.0);
+        }
+      }
+    }
     return row;
   }
 
   void _runLifestyleAnalysis(
       Map<String, double> rawNumerical, Map<String, int> cats) {
-    if (_lifestyleInterpreter == null) return;
+    if (_lifestyleInterpreter == null || _lifestyleSchema == null) return;
     try {
       List<double> inputRow = _buildInputRow(rawNumerical, cats);
+
+      // Ensure input array size strictly matches the schema
+      if (inputRow.length != _lifestyleSchema!['feature_names_out'].length) {
+        print("Schema Mismatch Error!");
+        return;
+      }
+
       var output = List.filled(1 * 3, 0.0).reshape([1, 3]);
       _lifestyleInterpreter!.run([inputRow], output);
       List<double> probs = List<double>.from(output[0]);
@@ -625,17 +645,26 @@ class _HomePageState extends State<HomePage> {
       setState(() => _results[4] = "Error");
     }
 
-    // 🔥 CHECK & SAVE SQLITE DB
     _checkAndSaveIfComplete();
     Navigator.pop(context);
   }
 
   void _calculateXAI(Map<String, double> rawNumerical, Map<String, int> cats,
       List<double> baseProbs, int targetClass) {
+    if (_lifestyleSchema == null) return;
+    List<String> numCols =
+        List<String>.from(_lifestyleSchema!['numerical_cols']);
+    List<double> stds = List<double>.from(_lifestyleSchema!['stds']);
+
     Map<String, double> impactScores = {};
     rawNumerical.forEach((key, val) {
       Map<String, double> perturbed = Map.from(rawNumerical);
-      perturbed[key] = val + (DataConfig.stds[key] ?? 1.0);
+
+      // Perturb exactly 1 Standard Deviation from the dynamically loaded schema
+      int idx = numCols.indexOf(key);
+      double dynamicStd = idx != -1 ? stds[idx] : 1.0;
+      perturbed[key] = val + dynamicStd;
+
       List<double> perturbedInput = _buildInputRow(perturbed, cats);
       var output = List.filled(1 * 3, 0.0).reshape([1, 3]);
       _lifestyleInterpreter!.run([perturbedInput], output);
@@ -705,7 +734,6 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    // STATE 2: LOCKED
     if (completedCount < 5) {
       return Container(
         padding: const EdgeInsets.all(16),
@@ -762,7 +790,6 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    // STATE 3: UNLOCKED
     double totalAD = 0, totalPD = 0, totalH = 0;
     int countAD = 0, countPD = 0, countH = 0;
     for (int i = 0; i < 5; i++) {
@@ -782,7 +809,6 @@ class _HomePageState extends State<HomePage> {
     double avgAD = countAD > 0 ? (totalAD / countAD) : 0.0;
     double avgPD = countPD > 0 ? (totalPD / countPD) : 0.0;
     double avgH = (totalH / countH);
-
     double sumAverages = avgAD + avgPD + avgH;
     double finalAD = avgAD / sumAverages;
     double finalPD = avgPD / sumAverages;
@@ -918,12 +944,11 @@ class _HomePageState extends State<HomePage> {
               icon: const Icon(Icons.history, color: Colors.blueGrey),
               onPressed: () {
                 Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const HistoryPage()),
-                );
+                    context,
+                    MaterialPageRoute(
+                        builder: (context) => const HistoryPage()));
               },
             ),
-            // Your existing Help button
             IconButton(
                 icon: const Icon(Icons.help_outline),
                 onPressed: () => setState(() => _showHelp = !_showHelp))
@@ -934,7 +959,13 @@ class _HomePageState extends State<HomePage> {
             : SafeArea(
                 child: Column(
                   children: [
-                    if (_showHelp) _buildHelpBanner(),
+                    if (_showHelp)
+                      Container(
+                          margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                          padding: const EdgeInsets.all(12),
+                          color: Colors.blue.withOpacity(0.08),
+                          child: const Text(
+                              "Follow the steps. Each step shows a clear result.")),
                     _buildStepStrip(),
                     Expanded(
                       child: ListView(
@@ -951,14 +982,6 @@ class _HomePageState extends State<HomePage> {
               ),
       ),
     );
-  }
-
-  Widget _buildHelpBanner() {
-    return Container(
-        margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-        padding: const EdgeInsets.all(12),
-        color: Colors.blue.withOpacity(0.08),
-        child: const Text("Follow the steps. Each step shows a clear result."));
   }
 
   Widget _buildStepStrip() {
