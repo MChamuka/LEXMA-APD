@@ -11,7 +11,7 @@ import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 import '../utils/pytorch_native.dart';
 import 'dart:math' as math;
 import '../utils/audio_processor.dart';
-
+import 'history_page.dart'; // Adjust path if you put it in a different folder
 // --- MODELS & WIDGETS ---
 import '../models/modality_model.dart';
 import '../widgets/ui_components.dart';
@@ -476,7 +476,7 @@ class _HomePageState extends State<HomePage> {
           '${directory.path}/temp_audio_${DateTime.now().millisecondsSinceEpoch}.wav';
       await _audioRecorder.start(
           const RecordConfig(
-              encoder: AudioEncoder.wav, sampleRate: 22050, numChannels: 1),
+              encoder: AudioEncoder.wav, sampleRate: 16000, numChannels: 1),
           path: path);
       setState(() {
         _isRecording = true;
@@ -915,6 +915,16 @@ class _HomePageState extends State<HomePage> {
           title: const Text("LEXMA-APD"),
           centerTitle: true,
           actions: [
+            IconButton(
+              icon: const Icon(Icons.history, color: Colors.blueGrey),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const HistoryPage()),
+                );
+              },
+            ),
+            // Your existing Help button
             IconButton(
                 icon: const Icon(Icons.help_outline),
                 onPressed: () => setState(() => _showHelp = !_showHelp))

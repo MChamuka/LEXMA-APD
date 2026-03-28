@@ -18,7 +18,6 @@ android {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
-    // --- ADD THIS NEW BLOCK RIGHT HERE ---
     // This stops Android from compressing your ML models so they can load in Release mode.
     androidResources {
         noCompress.add("tflite")
