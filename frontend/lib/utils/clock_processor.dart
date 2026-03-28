@@ -3,6 +3,36 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 
 class ClockProcessor {
+  // 🔥 FIXED: Pure Dart Noise Removal (Replaces OpenCV Morphology)
+  // Scans for tiny stray black dots (shadows/noise) and deletes them safely.
+  static img.Image removeNoise(img.Image src) {
+    // Create a copy to edit safely
+    img.Image out = img.copyResize(src, width: src.width, height: src.height);
+
+    for (int y = 1; y < src.height - 1; y++) {
+      for (int x = 1; x < src.width - 1; x++) {
+        var p = src.getPixel(x, y);
+
+        // If we find a black pixel (ink)
+        if (p.luminance < 128) {
+          int whiteNeighbors = 0;
+
+          // Check the pixels immediately surrounding it
+          if (src.getPixel(x, y - 1).luminance > 128) whiteNeighbors++;
+          if (src.getPixel(x, y + 1).luminance > 128) whiteNeighbors++;
+          if (src.getPixel(x - 1, y).luminance > 128) whiteNeighbors++;
+          if (src.getPixel(x + 1, y).luminance > 128) whiteNeighbors++;
+
+          // If it is an isolated dot mostly surrounded by white paper, erase it
+          if (whiteNeighbors >= 3) {
+            out.setPixelRgb(x, y, 255, 255, 255);
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   static Future<Uint8List> process(File file) async {
     final bytes = await file.readAsBytes();
     img.Image? original = img.decodeImage(bytes);
@@ -46,7 +76,7 @@ class ClockProcessor {
     // 4. Resize exactly to 224x224 for PyTorch
     img.Image finalImage = img.copyResize(cropped, width: 224, height: 224);
 
-    // 🔥 THE NEW FIX: BINARIZATION (Pure Black & White)
+    // 5. BINARIZATION (Pure Black & White)
     // This destroys all phone shadows and matches the clean training data!
     for (int y = 0; y < 224; y++) {
       for (int x = 0; x < 224; x++) {
@@ -62,6 +92,9 @@ class ClockProcessor {
       }
     }
 
-    return img.encodeJpg(finalImage);
+    // 6. 🔥 APPLY NOISE REMOVAL (Replaces Morphology)
+    final processedImage = removeNoise(finalImage);
+
+    return img.encodeJpg(processedImage);
   }
 }
