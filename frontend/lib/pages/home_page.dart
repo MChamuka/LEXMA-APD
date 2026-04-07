@@ -510,9 +510,10 @@ class _HomePageState extends State<HomePage> {
           double adProb = 0.0, pdProb = 0.0, healthyProb = 0.0;
 
           if (probs.isNotEmpty && probs.length == 3) {
-            double logit0 = probs[0];
-            double logit1 = probs[1];
-            double logit2 = probs[2];
+            double temperature = 250.0;
+            double logit0 = probs[0] / temperature;
+            double logit1 = probs[1] / temperature;
+            double logit2 = probs[2] / temperature;
 
             double maxVal = math.max(logit0, math.max(logit1, logit2));
             double exp0 = math.exp(logit0 - maxVal);
