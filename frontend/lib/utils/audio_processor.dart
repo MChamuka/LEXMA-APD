@@ -15,8 +15,7 @@ class AudioProcessor {
     final fft = FFT(nFft);
 
     List<List<double>> spec = [];
-    List<double> allMags =
-        []; // 🔥 NEW: Store all sounds to find the true average
+    List<double> allMags = []; // Store all sounds to find the true average
 
     // 1. STFT - Extract Magnitudes
     for (int i = 0; i <= audioData.length - nFft; i += hopLength) {
@@ -37,7 +36,7 @@ class AudioProcessor {
       spec.add(frameMag);
     }
 
-    // 🔥 THE FIX: Sort all sounds from quietest to loudest
+    // Sort all sounds from quietest to loudest
     allMags.sort();
 
     // Pick the 98th percentile as the "Max". This completely ignores loud screen taps!
@@ -90,7 +89,7 @@ class AudioProcessor {
       for (int y = 0; y < height; y++) {
         double dbVal = dbSpec[x][y];
 
-        // 🔥 THE FIX: Stretch the contrast!
+        // Stretch the contrast!
         // Quietest sound becomes pure black (0), loudest becomes pure white (255)
         double scaled = (dbVal - minDb) / (maxDb - minDb);
         int pixelVal = (scaled * 255).clamp(0, 255).toInt();
