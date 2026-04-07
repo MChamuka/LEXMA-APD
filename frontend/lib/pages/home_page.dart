@@ -558,7 +558,57 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // 🔥 THE NEW DYNAMIC INPUT BUILDER (Strictly uses JSON Schema)
+  Future<void> _downloadSpiralTemplate() async {
+    try {
+      // Request storage permissions
+      var status = await Permission.storage.request();
+      if (!status.isGranted && Platform.isAndroid) {
+        // Fallback for Android 13+ which uses different granular media permissions
+        await Permission.photos.request();
+      }
+
+      // Load the template from your assets
+      final byteData = await rootBundle.load('assets/spiral_template.png');
+
+      Directory? dir;
+      if (Platform.isAndroid) {
+        // Try saving directly to the public Downloads folder on Android
+        dir = Directory('/storage/emulated/0/Download');
+        if (!await dir.exists()) {
+          dir = await getExternalStorageDirectory();
+        }
+      } else {
+        // iOS fallback to Documents
+        dir = await getApplicationDocumentsDirectory();
+      }
+
+      if (dir != null) {
+        final file = File('${dir.path}/LEXMA_Spiral_Template.png');
+        await file.writeAsBytes(byteData.buffer.asUint8List());
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Template downloaded to: ${file.path}"),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Error downloading template: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // HE NEW DYNAMIC INPUT BUILDER (Strictly uses JSON Schema)
   List<double> _buildInputRow(
       Map<String, double> numericals, Map<String, int> cats) {
     if (_lifestyleSchema == null) return []; // Safety fallback
@@ -1056,7 +1106,8 @@ class _HomePageState extends State<HomePage> {
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment
+              .stretch, // Changed to stretch to align buttons nicely
           children: [
             Row(
               children: [
@@ -1083,6 +1134,21 @@ class _HomePageState extends State<HomePage> {
                 style: TextStyle(color: color, fontWeight: FontWeight.bold)),
             _buildExplanationPanel(m),
             const SizedBox(height: 12),
+
+            // 🔥 NEW: Inject Download Template Button ONLY for Spiral step
+            if (m.stepName == "Spiral") ...[
+              OutlinedButton.icon(
+                onPressed: () => _downloadSpiralTemplate(),
+                icon: const Icon(Icons.file_download),
+                label: const Text("Download Spiral Template"),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.blueGrey,
+                  side: const BorderSide(color: Colors.blueGrey),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+
             ElevatedButton.icon(
               onPressed: isMissing
                   ? null
