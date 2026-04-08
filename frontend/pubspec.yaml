@@ -54,6 +54,7 @@ flutter:
     - assets/models/lifestyle.tflite
     - assets/models/voice_pure.ptl
 
+    - assets/models/lifestyle_schema.json
     - assets/labels.txt
     - assets/spiral_labels.txt
     - assets/spiral_template.png

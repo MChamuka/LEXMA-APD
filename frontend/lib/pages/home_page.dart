@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 import 'dart:io';
-import 'dart:convert'; // 🔥 NEW: Required for parsing the JSON Schema
+import 'dart:convert'; //   Required for parsing the JSON Schema
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -45,7 +45,7 @@ class _HomePageState extends State<HomePage> {
   tfl.Interpreter? _lifestyleInterpreter;
 
   Map<String, dynamic>?
-      _lifestyleSchema; // 🔥 NEW: Holds the Python preprocessor rules
+      _lifestyleSchema; //   Holds the Python preprocessor rules
 
   bool _areModelsLoaded = false;
   final AudioRecorder _audioRecorder = AudioRecorder();
@@ -210,7 +210,7 @@ class _HomePageState extends State<HomePage> {
       _lifestyleInterpreter =
           await tfl.Interpreter.fromAsset('assets/models/lifestyle.tflite');
 
-      // 🔥 NEW: LOAD THE JSON SCHEMA
+      //   LOAD THE JSON SCHEMA
       String schemaStr =
           await rootBundle.loadString('assets/models/lifestyle_schema.json');
       _lifestyleSchema = json.decode(schemaStr);
@@ -360,7 +360,7 @@ class _HomePageState extends State<HomePage> {
           }
 
           prediction =
-              "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
+              "$diagText\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
           File xaiImage = await FaceXAIService.generateHeatmap(
               imageFile: originalFile,
               landmarks: landmarks,
@@ -397,7 +397,7 @@ class _HomePageState extends State<HomePage> {
           String diagText =
               pdProb > 0.5 ? "Parkinson's Detected" : "Healthy Pattern";
           prediction =
-              "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(2)}%";
+              "$diagText\nPROB: ${(displayProb * 100).toStringAsFixed(2)}%";
           File xaiImage = await SpiralXAIService.generateHeatmap(
               originalFile: originalFile,
               model: model,
@@ -452,7 +452,7 @@ class _HomePageState extends State<HomePage> {
           }
 
           String uiText =
-              "$diagText\nRAW: $rawArrayText\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
+              "$diagText\nPROB: ${(displayProb * 100).toStringAsFixed(1)}%";
           File xaiImage = await ClockXAIService.generateHeatmap(
               originalFile: originalFile,
               model: model,
@@ -538,7 +538,7 @@ class _HomePageState extends State<HomePage> {
           }
 
           String uiText =
-              "$prediction\nRAW: $rawArrayText\nAD: ${(adProb * 100).toStringAsFixed(1)}% | PD: ${(pdProb * 100).toStringAsFixed(1)}% | H: ${(healthyProb * 100).toStringAsFixed(1)}%";
+              "$prediction\nAD: ${(adProb * 100).toStringAsFixed(1)}% | PD: ${(pdProb * 100).toStringAsFixed(1)}% | H: ${(healthyProb * 100).toStringAsFixed(1)}%";
           File heatmap = await AudioXAIService.generateHeatmap(
               specFile: rawSpec,
               model: _audioModel!,
@@ -1136,7 +1136,7 @@ class _HomePageState extends State<HomePage> {
             _buildExplanationPanel(m),
             const SizedBox(height: 12),
 
-            // 🔥 NEW: Inject Download Template Button ONLY for Spiral step
+            //   Inject Download Template Button ONLY for Spiral step
             if (m.stepName == "Spiral") ...[
               OutlinedButton.icon(
                 onPressed: () => _downloadSpiralTemplate(),
