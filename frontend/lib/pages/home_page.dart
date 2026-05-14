@@ -222,16 +222,16 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // 🔥 THE SQLITE AUTO-SAVE FUNCTION
+  //  THE SQLITE AUTO-SAVE FUNCTION
   Future<void> _checkAndSaveIfComplete() async {
     if (_hasSavedResult) return;
 
     int completedCount = 0;
 
-    // 🧠 FIX OPTION 1: Validation-Weighted Fusion
+    //FIX OPTION 1: Validation-Weighted Fusion
     // These weights represent the Validation Accuracy of each individual model
     // Index: [Face, Spiral, Voice, CDT, Lifestyle]
-    List<double> weights = [0.850, 0.900, 0.880, 0.786, 0.850];
+    List<double> weights = [0.888, 0.792, 0.953, 0.765, 0.704];
 
     double totalAD = 0, totalPD = 0, totalH = 0;
     double sumWeightAD = 0, sumWeightPD = 0, sumWeightH = 0;
@@ -706,8 +706,9 @@ class _HomePageState extends State<HomePage> {
       if (maxIndex != 2) _calculateXAI(rawNumerical, cats, probs, maxIndex);
 
       setState(() {
-        _results[4] = "$diag (${(maxVal * 100).toStringAsFixed(1)}%)";
-        _probs[4] = maxVal;
+        _results[4] =
+            "$diag\nAD: ${(adScore * 100).toStringAsFixed(1)}% | PD: ${(pdScore * 100).toStringAsFixed(1)}% | H: ${(hScore * 100).toStringAsFixed(1)}%";
+        _probs[4] = adScore + pdScore;
         _detailedProbs[4] = {'AD': adScore, 'PD': pdScore, 'H': hScore};
       });
     } catch (e) {
@@ -862,7 +863,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     // STATE 3: UNLOCKED (All 5 modalities complete)
-    // 🔥 THE NEW FIX: Validation-Weighted Independent Averaging
+    // THE NEW FIX: Validation-Weighted Independent Averaging
     List<double> weights = [0.850, 0.900, 0.880, 0.786, 0.850];
 
     double totalAD = 0, totalPD = 0, totalH = 0;
